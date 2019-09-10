@@ -1,0 +1,12 @@
+[package]
+name = "index"
+version = "0.1.0"
+authors = ["MashPlant <740678788@qq.com>"]
+edition = "2018"
+
+[dependencies]
+common = { path = "../common" }
+physics = { path = "../physics" }
+db = { path = "../db" }
+chrono = "0.4"
+unchecked_unwrap = "1.0.1"

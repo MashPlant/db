@@ -1,0 +1,15 @@
+cargo-features = ["profile-overrides"]
+
+[workspace]
+members = [
+  "driver",
+  "syntax",
+  "physics",
+  "db",
+  "index",
+  "query",
+  "common",
+]
+
+[profile.dev.overrides."parser-macros"]
+opt-level = 3
