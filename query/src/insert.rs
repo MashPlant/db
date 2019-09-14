@@ -1,4 +1,3 @@
-use chrono::NaiveDate;
 use hashbrown::HashSet;
 
 use common::{*, BareTy::*, Error::*};
@@ -25,7 +24,7 @@ impl InsertCtx<'_> {
       }
     }
     let pk_set: HashSet<_> = if pks.len() > 1 {
-      db.record_iter(tp).map(|data| Self::hash_pks(data.as_ptr(), &pks)).collect()
+      db.record_iter(tp).map(|(data, _)| Self::hash_pks(data.as_ptr(), &pks)).collect()
     } else { HashSet::new() }; // no need to collect
     InsertCtx { tp, table_page, pks, pk_set }
   }
@@ -68,12 +67,12 @@ impl InsertCtx<'_> {
     buf.write_bytes(0, (vals.len() + 31) / 32); // clear null-bitset
     for (idx, &val) in vals.iter().enumerate() {
       let ci = tp.cols.get_unchecked(idx);
-      match (ci.ty, val) {
-        (ColTy { .. }, Lit::Null) => {
-          if ci.flags.contains(ColFlags::NOTNULL) { return Err(InsertNullOnNotNull); }
-          *(buf as *mut u32).add(idx / 32) |= 1 << ((idx % 32) as u32);
-        }
-        _ => fill_ptr(buf.add(ci.off as usize), ci.ty, val)?,
+      if val.is_null() {
+        // primary implies notnull, so inserting null to primary key  will be rejected here
+        if ci.flags.contains(ColFlags::NOTNULL) { return Err(PutNullOnNotNull); }
+        *(buf as *mut u32).add(idx / 32) |= 1 << ((idx % 32) as u32);
+      } else {
+        fill_ptr(buf.add(ci.off as usize), ci.ty, val)?;
       }
     }
     Ok(())
@@ -84,7 +83,7 @@ impl InsertCtx<'_> {
     for i in 0..vals.len() {
       let col = self.tp.cols.get_unchecked(i);
       let mut ptr = data.add(col.off as usize);
-      if col.flags.contains(ColFlags::UNIQUE) {
+      if col.flags.contains(ColFlags::UNIQUE) { // all unique keys have index
         debug_assert_ne!(col.index, !0);
         if !is_null(data, i) {
           // null item doesn't need uniqueness check
@@ -122,9 +121,9 @@ impl InsertCtx<'_> {
           Char | VarChar => if col.ty.size >= f_col.ty.size { // this col's string is not shorter, no need of special treatment
             handle!(Char) // actually Char and VarChar are handled in the same way
           } else {
-            let mut tmp = vec![0u8; f_col.ty.size as usize + 1];
-            tmp.as_mut_ptr().copy_from_nonoverlapping(ptr, col.ty.size as usize + 1);
-            ptr = tmp.as_ptr(); // `handle` use this `ptr` instead of the previous one
+            let tmp = Align4U8::new(f_col.ty.size as usize + 1);
+            tmp.ptr.copy_from_nonoverlapping(ptr, col.ty.size as usize + 1);
+            ptr = tmp.ptr; // `handle` use this `ptr` instead of the previous one
             handle!(Char)
           }
         }
@@ -157,5 +156,5 @@ impl InsertCtx<'_> {
   }
 }
 
-#[inline]
+#[inline(always)]
 pub fn insert(i: &Insert, db: &mut Db) -> Result<()> { unsafe { InsertCtx::work(i, db) } }

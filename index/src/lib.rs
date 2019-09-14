@@ -15,6 +15,7 @@ pub mod iter;
 pub struct Index<const T: BareTy> {
   db: NonNull<Db>,
   root: u32,
+  // col points to (table_page in db, col_slot in table) in TablePage
   col: Rid,
   rid_off: u16,
   _p: PhantomData<Cmp<{ T }>>,
@@ -28,7 +29,7 @@ impl<const T: BareTy> Index<{ T }> {
     Index { db: NonNull::new_unchecked(db), root, col, rid_off, _p: PhantomData }
   }
 
-  #[inline]
+  #[inline(always)]
   unsafe fn db<'a>(&mut self) -> &'a mut Db { self.db.as_ptr().r() }
 
   pub unsafe fn insert(&mut self, data: *const u8, rid: Rid) {
@@ -90,10 +91,10 @@ impl<const T: BareTy> Index<{ T }> {
   }
 
   pub unsafe fn delete(&mut self, data: *const u8, rid: Rid) {
-    self.do_remove(self.root as usize, self.make_data_rid(data, rid).ptr);
+    self.do_delete(self.root as usize, self.make_data_rid(data, rid).ptr);
   }
 
-  unsafe fn do_remove(&mut self, page: usize, x: *const u8) -> (*const u8, bool) {
+  unsafe fn do_delete(&mut self, page: usize, x: *const u8) -> (*const u8, bool) {
     let ip = self.db().get_page::<IndexPage>(page);
     self.debug_check(page, ip);
     let (slot_size, key_size) = (ip.slot_size() as usize, ip.key_size() as usize);
@@ -111,7 +112,7 @@ impl<const T: BareTy> Index<{ T }> {
       remove!(lb);
     } else {
       let pos = upper_bound::<{ T }>(ip, x).max(1) - 1;
-      let (new_min, need_merge) = self.do_remove(at_ch!(pos) as usize, x);
+      let (new_min, need_merge) = self.do_delete(at_ch!(pos) as usize, x);
       at!(pos).copy_from_nonoverlapping(new_min, key_size); // update dup key
       if need_merge {
         if ip.count == 1 {

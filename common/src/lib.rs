@@ -54,7 +54,7 @@ impl<T> Ref2PtrMut for &T {
   fn p(self) -> *mut T { self as *const T as *mut T }
 }
 
-#[inline]
+#[inline(always)]
 pub unsafe fn str_from_parts<'a>(data: *const u8, len: usize) -> &'a str {
   str::from_utf8_unchecked(slice::from_raw_parts(data, len))
 }
@@ -77,13 +77,13 @@ impl ColTy {
   }
 
   // char and varchar can have size = 255 + 1, so u16 is necessary
-  #[inline]
+  #[inline(always)]
   pub fn size(self) -> u16 {
     use BareTy::*;
     match self.ty { Int => 4, Bool => 1, Float => 4, Char | VarChar => self.size as u16 + 1, Date => 4 }
   }
 
-  #[inline]
+  #[inline(always)]
   pub fn align4(self) -> bool {
     use BareTy::*;
     match self.ty { Int | Float | Date => true, Bool | Char | VarChar => false }
@@ -100,6 +100,8 @@ pub enum OwnedLit { Null, Int(i32), Bool(bool), Float(f32), Str(Box<str>) }
 pub enum LitTy { Null, Int, Bool, Float, Str }
 
 impl Lit<'_> {
+  pub fn is_null(&self) -> bool { match self { Lit::Null => true, _ => false, } }
+
   pub fn ty(&self) -> LitTy {
     use Lit::*;
     match self { Null => LitTy::Null, Int(_) => LitTy::Int, Bool(_) => LitTy::Bool, Float(_) => LitTy::Float, Str(_) => LitTy::Str, }

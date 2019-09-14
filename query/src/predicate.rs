@@ -8,8 +8,8 @@ use crate::is_null;
 macro_rules! handle_op {
   ($cmp: ident, $op:expr, $p: ident, $l: expr, $r: expr) => {
     match $op {
-      Lt => $cmp!(<, false, $p, $l, $r), Le => $cmp!(<, false, $p, $l, $r), Ge => $cmp!(<, false, $p, $l, $r),
-      Gt => $cmp!(<, false, $p, $l, $r), Eq => $cmp!(<, false, $p, $l, $r), Ne => $cmp!(<, true, $p, $l, $r),
+      Lt => $cmp!(<, false, $p, $l, $r), Le => $cmp!(<=, false, $p, $l, $r), Ge => $cmp!(>=, false, $p, $l, $r),
+      Gt => $cmp!(>, false, $p, $l, $r), Eq => $cmp!(==, false, $p, $l, $r), Ne => $cmp!(!=, true, $p, $l, $r),
     }
   };
 }
@@ -38,13 +38,13 @@ pub unsafe fn one_predicate(e: &Expr, tp: &TablePage) -> Result<Box<dyn Fn(*cons
           (Float, Lit::Float(v)) => handle_op!(cmp, op, p, *(p.add(l_off) as *const f32), v),
           (Char, Lit::Str(v)) | (VarChar, Lit::Str(v)) => {
             let v = Box::<str>::from(v);
-            handle_op!(cmp, op, p, str_from_parts(p.add(l_off + 1), *p.add(l_off) as usize), &v)
+            handle_op!(cmp, op, p, str_from_parts(p.add(l_off + 1), *p.add(l_off) as usize), v.as_ref())
           }
           (Date, Lit::Str(v)) => match NaiveDate::parse_from_str(v, "%Y-%m-%d") {
             Ok(date) => handle_op!(cmp, op, p, *(p.add(l_off) as *const NaiveDate), date),
-            Err(reason) => return Err(InsertInvalidDate { date: (*v).into(), reason })
+            Err(reason) => return Err(InvalidDate { date: (*v).into(), reason })
           }
-          (expect, r)  => return Err(RecordLitTyMismatch { expect, actual: r.ty() })
+          (expect, r) => return Err(RecordLitTyMismatch { expect, actual: r.ty() })
         }
       }
       Atom::ColRef(r) => {
@@ -54,8 +54,7 @@ pub unsafe fn one_predicate(e: &Expr, tp: &TablePage) -> Result<Box<dyn Fn(*cons
         macro_rules! cmp {
           ($op: tt, $nullable: expr, $p: ident, $l: expr, $r: expr) => {
             Ok(Box::new(move |$p| {
-              if is_null($p, l_idx) { return $nullable; }
-              if is_null($p, r_idx) { return $nullable; }
+              if is_null($p, l_idx) || is_null($p, r_idx) { return $nullable; }
               $l $op $r
             }))
           };
@@ -116,7 +115,23 @@ pub unsafe fn cross_predicate(op: CmpOp, col: (&str, &str), tp: (&TablePage, &Ta
   }
 }
 
-#[inline]
+pub unsafe fn one_where(where_: &[Expr], table: &str, tp: &TablePage) -> Result<impl Fn(*const u8) -> bool> {
+  let mut preds = Vec::with_capacity(where_.len());
+  for e in where_ {
+    let (l, r) = (e.lhs_col(), e.rhs_col());
+    if let Some(t) = l.table {
+      if t != table { return Err(NoSuchTable(t.into())); }
+    }
+    if let Some(&ColRef { table: Some(t), .. }) = r {
+      if t != table { return Err(NoSuchTable(t.into())); }
+    }
+    // table name is checked before, col name & type & value format/size all checked in one_predicate
+    preds.push(one_predicate(e, tp)?);
+  }
+  Ok(and(preds))
+}
+
+#[inline(always)]
 pub fn and<T: Copy>(ps: Vec<Box<dyn Fn(T) -> bool>>) -> impl Fn(T) -> bool {
   move |t| ps.iter().all(|p| p(t))
 }

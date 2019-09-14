@@ -15,6 +15,7 @@ pub enum Error {
   DupTable(Box<str>),
   DupCol(Box<str>),
   DupIndex(Box<str>),
+  CreateIndexOnNonEmpty(Box<str>),
   NoSuchTable(Box<str>),
   NoSuchCol(Box<str>),
   NoSuchIndex(Box<str>),
@@ -24,13 +25,17 @@ pub enum Error {
   RecordTyMismatch { expect: BareTy, actual: BareTy },
   RecordLitTyMismatch { expect: BareTy, actual: LitTy },
   InsertLenMismatch { expect: u8, actual: usize },
-  InsertStrTooLong { limit: u8, actual: usize },
-  InsertNullOnNotNull,
+  // these 2 can be used in both insert and update, so call them put
+  PutStrTooLong { limit: u8, actual: usize },
+  PutNullOnNotNull,
   InsertDupOnUniqueKey { col: Box<str>, val: OwnedLit },
   InsertNoExistOnForeignKey { col: Box<str>, val: OwnedLit },
   InsertDupCompositePrimaryKey,
+  // CmpOnNull if lit is null (if data in db is null, != returns true, all others returns false)
   CmpOnNull,
-  InsertInvalidDate { date: Box<str>, reason: chrono::ParseError },
+  InvalidDate { date: Box<str>, reason: chrono::ParseError },
+  // this is not supported
+  UpdateWithIndex(Box<str>),
   IO(std::io::Error),
   Unk(Box<dyn std::error::Error>),
 }

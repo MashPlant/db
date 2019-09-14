@@ -19,9 +19,9 @@ pub struct ColInfo {
   // index root page id, !0 for none
   pub index: u32,
   // point to the TableInfo in DbPage, !0 for none
-  pub foreign_col: u8,
-  // point to the ColInfo in TablePage
   pub foreign_table: u8,
+  // point to the ColInfo in TablePage, if foreign_table == !0, foreign_col is meaningless
+  pub foreign_col: u8,
   pub flags: ColFlags,
   pub name_len: u8,
   pub name: [u8; MAX_COL_NAME as usize],
@@ -57,7 +57,7 @@ pub const MAX_COL_NAME: u32 = 50;
 pub const MAX_COL: u32 = 127;
 
 impl TablePage {
-  #[inline]
+  #[inline(always)]
   pub fn init(&mut self, id: u32, size: u16, col_num: u8) {
     (self.prev = id, self.next = id);  // self-circle to represent empty linked list
     self.count = 0;
@@ -71,7 +71,7 @@ impl TablePage {
     self.cols.iter().enumerate().filter_map(move |(i, ci)| if i < col_num { Some(ci.name()) } else { None })
   }
 
-  #[inline]
+  #[inline(always)]
   pub unsafe fn get_ci<'a>(&mut self, col: &str) -> Result<&'a mut ColInfo> {
     match self.p().r().names().enumerate().find(|n| n.1 == col) {
       Some((idx, _)) => Ok(self.p().r().cols.get_unchecked_mut(idx)),
@@ -79,7 +79,7 @@ impl TablePage {
     }
   }
 
-  #[inline]
+  #[inline(always)]
   pub unsafe fn id_of(&self, col: &ColInfo) -> usize {
     (col as *const ColInfo).offset_from(self.cols.as_ptr()) as usize
   }

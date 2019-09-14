@@ -39,7 +39,7 @@ impl Db {
     }
   }
 
-  #[inline]
+  #[inline(always)]
   pub fn path(&self) -> &str { &self.path }
 }
 
@@ -59,6 +59,7 @@ impl Db {
         ci.name_len = c.name.len() as u8;
         ci.name.as_mut_ptr().copy_from_nonoverlapping(c.name.as_ptr(), c.name.len());
         ci.flags.set(ColFlags::NOTNULL, c.notnull); // todo: primary also implies notnull
+        ci.foreign_table = !0;
         // todo: many fields needing to fill, including index
         size += c.ty.size();
         if size as usize > MAX_DATA_BYTE { return Err(ColSizeTooBig(size as usize)); }
@@ -114,12 +115,14 @@ impl Db {
 impl Db {
   pub fn create_index(&mut self, table: &str, col: &str) -> Result<()> {
     unsafe {
-      let ci = self.get_ci(table, col)?;
+      let tp = self.get_ti(table)?.meta as usize;
+      let tp = self.get_page::<TablePage>(tp) ;
+      if self.record_iter(tp).count() != 0 { return Err(CreateIndexOnNonEmpty(table.into())); }
+      let ci = tp.get_ci(col)?;
       if ci.index != !0 { return Err(DupIndex(col.into())); }
       let (id, ip) = self.allocate_page::<IndexPage>();
       ci.index = id as u32;
       ip.init(true, ci.ty.size()); // it is the root, but also a leaf
-      // todo insert all
       Ok(())
     }
   }
@@ -135,7 +138,7 @@ impl Db {
 }
 
 impl Db {
-  #[inline]
+  #[inline(always)]
   pub unsafe fn get_page<'a, P>(&mut self, page: usize) -> &'a mut P {
     debug_assert!(page < self.pages);
     (self.mmap.get_unchecked_mut(page * PAGE_SIZE).p() as *mut P).r()
@@ -143,7 +146,7 @@ impl Db {
 
   // the return P is neither initialized nor zeroed, just keeping the original bytes
   // allocation may not always be successful(when 64G is used up), but in most cases this error is not recoverable, so let it crash
-  #[inline]
+  #[inline(always)]
   pub unsafe fn allocate_page<'a, P>(&mut self) -> (usize, &'a mut P) {
     let dp = self.get_page::<DbPage>(0);
     let free = if dp.first_free != !0 {
@@ -158,7 +161,7 @@ impl Db {
     (free, self.get_page(free) as _)
   }
 
-  #[inline]
+  #[inline(always)]
   pub unsafe fn deallocate_page(&mut self, page: usize) {
     let dp = self.get_page::<DbPage>(0);
     let first = self.get_page::<u32>(page);
@@ -167,7 +170,7 @@ impl Db {
   }
 
   // unsafe because return value's lifetime is arbitrary
-  #[inline]
+  #[inline(always)]
   pub unsafe fn get_ti<'a>(&mut self, table: &str) -> Result<&'a mut TableInfo> {
     let dp = self.get_page::<DbPage>(0);
     match dp.p().r().names().enumerate().find(|n| n.1 == table) {
@@ -176,12 +179,12 @@ impl Db {
     }
   }
 
-  #[inline]
+  #[inline(always)]
   pub unsafe fn id_of(&self, tp: &TablePage) -> usize {
     (tp as *const TablePage).offset_from(self.mmap.as_ptr() as *const TablePage) as usize
   }
 
-  #[inline]
+  #[inline(always)]
   pub unsafe fn get_ci<'a>(&mut self, table: &str, col: &str) -> Result<&'a mut ColInfo> {
     let meta = self.get_ti(table)?.meta as usize;
     self.get_page::<TablePage>(meta).get_ci(col)
@@ -194,10 +197,12 @@ impl Db {
       dp.init(tp.prev, table_page); // push back
       tp.first_free = id as u32;
     }
-    let dp = self.get_page::<DataPage>(tp.first_free as usize);
+    let free_page = tp.first_free;
+    let dp = self.get_page::<DataPage>(free_page as usize);
     debug_assert!(dp.count < tp.cap);
+    debug_assert!(((tp.cap + 31) / 32) as usize <= MAX_SLOT_BS);
     let mut slot = mem::MaybeUninit::<u32>::uninit();
-    'out: for i in 0..(tp.cap / 32) as usize {
+    'out: for i in 0..((tp.cap + 31) / 32) as usize {
       let x = dp.used.get_unchecked_mut(i);
       if *x != !0 {
         for b in 0..32 {
@@ -214,17 +219,27 @@ impl Db {
     if dp.count == tp.cap { // full, move to next
       tp.first_free = dp.next_free;
     }
-    Rid::new(table_page, slot.assume_init())
+    Rid::new(free_page, slot.assume_init())
   }
 
   pub unsafe fn deallocate_data_slot(&mut self, tp: &mut TablePage, rid: Rid) {
     let (page, slot) = (rid.page(), rid.slot());
     let dp = self.get_page::<DataPage>(page as usize);
+    debug_assert_eq!((*dp.used.get_unchecked(slot as usize / 32) >> (slot % 32)) & 1, 1);
     *dp.used.get_unchecked_mut(slot as usize / 32) &= !(1 << (slot % 32));
-    if dp.count == tp.cap { // now not in free list, add it
+    if dp.count == tp.cap { // not in free list, add it
       dp.next_free = tp.first_free;
       tp.first_free = page;
+    } else if dp.count == 1 {
+      // todo: free it, give back to db
     }
     dp.count -= 1;
+  }
+
+  #[inline(always)]
+  pub unsafe fn get_data_slot(&mut self, tp: &TablePage, rid: Rid) -> *mut u8 {
+    let (page, slot) = (rid.page(), rid.slot());
+    let off = (slot * tp.size as u32) as usize;
+    self.get_page::<DataPage>(page as usize).data.as_mut_ptr().add(off)
   }
 }

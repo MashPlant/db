@@ -55,6 +55,6 @@ impl Eval {
     }
   }
 
-  #[inline]
+  #[inline(always)]
   fn db(&mut self) -> Result<&mut Db> { self.db.as_mut().ok_or(NoDbInUse) }
 }

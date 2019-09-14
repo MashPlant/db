@@ -20,7 +20,7 @@ pub struct RecordIter<'a> {
 }
 
 impl Iterator for RecordIter<'_> {
-  type Item = NonNull<u8>;
+  type Item = (NonNull<u8>, Rid);
 
   fn next(&mut self) -> Option<Self::Item> {
     unsafe {
@@ -29,7 +29,9 @@ impl Iterator for RecordIter<'_> {
         for i in self.slot as usize..MAX_SLOT_BS {
           if ((*dp.used.get_unchecked(i / 32) >> (i as u32 % 32)) & 1) != 0 {
             self.slot = i as u16 + 1;
-            return Some(NonNull::new_unchecked(dp.data.as_mut_ptr().add(i * self.slot_size as usize)));
+            let data = dp.data.as_mut_ptr().add(i * self.slot_size as usize);
+            let rid = Rid::new(self.page, i as u32);
+            return Some((NonNull::new_unchecked(data), rid));
           }
         }
         if dp.next != self.head {

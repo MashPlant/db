@@ -31,7 +31,7 @@ pub const MAX_TABLE_NAME: u32 = 59;
 pub const MAX_TABLE: u32 = 127;
 
 impl DbPage {
-  #[inline]
+  #[inline(always)]
   pub fn init(&mut self) {
     self.magic = *MAGIC;
     self.first_free = !0;

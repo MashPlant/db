@@ -1,10 +1,9 @@
 use std::fmt;
-use chrono::NaiveDate;
 
 use common::{*, BareTy::*, Error::*};
 use syntax::ast::*;
-use physics::*;
-use index::Index;
+//use physics::*;
+//use index::Index;
 use db::Db;
 
 pub struct SelectResult {}
