@@ -23,7 +23,7 @@ pub fn update(u: &Update, db: &mut Db) -> Result<()> {
       }
     }
 
-    filter(&u.where_, tp.p().r(), db, pred, |data, _| {
+    filter(&u.where_, tp.pr(), db, pred, |data, _| {
       for &(col, val) in &u.sets {
         let ci = tp.get_ci(col).unchecked_unwrap();
         let idx = tp.id_of(ci);

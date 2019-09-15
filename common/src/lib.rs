@@ -27,6 +27,14 @@ pub trait Ptr2Ref {
 pub trait Ref2PtrMut {
   type Target;
   fn p(self) -> *mut Self::Target;
+
+  // pr for p().r()
+  #[inline(always)]
+  unsafe fn pr<'a>(self) -> &'a mut Self::Target where Self: std::marker::Sized { self.p().r() }
+
+  // prc for const version of pr
+  #[inline(always)]
+  unsafe fn prc<'a>(self) -> &'a Self::Target where Self: std::marker::Sized { &*self.p().r() }
 }
 
 impl<T> Ptr2Ref for *mut T {
@@ -129,3 +137,10 @@ impl Drop for Align4U8 {
     unsafe { dealloc(self.ptr, Layout::from_size_align_unchecked(self.size, 4)) }
   }
 }
+
+pub type IndexMap<K, V> = indexmap::IndexMap<K, V, hashbrown::hash_map::DefaultHashBuilder>;
+pub type IndexSet<K> = indexmap::IndexSet<K, hashbrown::hash_map::DefaultHashBuilder>;
+pub type HashMap<K, V> = hashbrown::HashMap<K, V>;
+pub type HashSet<K> = hashbrown::HashSet<K>;
+pub type HashEntry<'a, K, V> = hashbrown::hash_map::Entry<'a, K, V, hashbrown::hash_map::DefaultHashBuilder>;
+pub type IndexEntry<'a, K, V> = indexmap::map::Entry<'a, K, V>;

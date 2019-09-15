@@ -1,6 +1,5 @@
 use std::{fs::{File, OpenOptions}, path::Path, mem};
 use memmap::{MmapOptions, MmapMut};
-use hashbrown::HashSet;
 
 use physics::*;
 use common::{*, Error::*};
@@ -173,7 +172,7 @@ impl Db {
   #[inline(always)]
   pub unsafe fn get_ti<'a>(&mut self, table: &str) -> Result<&'a mut TableInfo> {
     let dp = self.get_page::<DbPage>(0);
-    match dp.p().r().names().enumerate().find(|n| n.1 == table) {
+    match dp.pr().names().enumerate().find(|n| n.1 == table) {
       Some((idx, _)) => Ok(dp.tables.get_unchecked_mut(idx)),
       None => Err(NoSuchTable(table.into())),
     }

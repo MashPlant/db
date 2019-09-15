@@ -14,7 +14,7 @@ pub fn show_one_db(path: impl AsRef<Path>, s: &mut String) -> Result<()> {
 impl Db {
   pub fn show_table(&self, name: &str) -> Result<String> {
     unsafe {
-      let selfm = self.p().r();
+      let selfm = self.pr();
       let dp = selfm.get_page::<DbPage>(0);
       match dp.names().enumerate().find(|n| n.1 == name) {
         Some((idx, _)) => Ok(selfm.show_table_info(dp.tables.get_unchecked(idx))),
@@ -26,7 +26,7 @@ impl Db {
   pub fn show_tables(&self) -> String {
     unsafe {
       let mut s = String::new();
-      let selfm = self.p().r();
+      let selfm = self.pr();
       let dp = selfm.get_page::<DbPage>(0);
       for i in 0..dp.table_num as usize {
         let _ = write!(s, "{}", selfm.show_table_info(dp.tables.get_unchecked(i)));

@@ -65,7 +65,7 @@ impl<const T: BareTy> Index<{ T }> {
 
   #[inline(always)]
   pub unsafe fn contains(&self, x: *const u8) -> bool {
-    self.p().r().lower_bound(x) != self.p().r().upper_bound(x)
+    self.pr().lower_bound(x) != self.pr().upper_bound(x)
   }
 
   unsafe fn do_lower_bound(&mut self, x: *const u8) -> (u32, u16) {

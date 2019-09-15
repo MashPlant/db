@@ -16,7 +16,7 @@ macro_rules! handle_op {
 
 // assume both lhs and rhs belongs to tp's table, so ColRef::table is not checked
 pub unsafe fn one_predicate(e: &Expr, tp: &TablePage) -> Result<Box<dyn Fn(*const u8) -> bool>> {
-  let l = tp.p().r().get_ci(e.lhs_col().col)?;
+  let l = tp.pr().get_ci(e.lhs_col().col)?;
   let l_idx = (l as *const ColInfo).offset_from(tp.cols.as_ptr()) as usize;
   let l_off = l.off as usize;
   match e {
@@ -48,7 +48,7 @@ pub unsafe fn one_predicate(e: &Expr, tp: &TablePage) -> Result<Box<dyn Fn(*cons
         }
       }
       Atom::ColRef(r) => {
-        let r = tp.p().r().get_ci(r.col)?;
+        let r = tp.pr().get_ci(r.col)?;
         let r_idx = (r as *const ColInfo).offset_from(tp.cols.as_ptr()) as usize;
         let r_off = r.off as usize;
         macro_rules! cmp {
@@ -78,8 +78,7 @@ pub unsafe fn one_predicate(e: &Expr, tp: &TablePage) -> Result<Box<dyn Fn(*cons
       let pat = regex::escape(pat).replace('%', ".*").replace('_', ".");
       match regex::Regex::new(&pat) {
         Ok(re) => Ok(Box::new(move |p|
-          !is_null(p, l_idx) &&
-            re.is_match(str_from_parts(p.add(l_off + 1), *p.add(l_off) as usize))
+          !is_null(p, l_idx) && re.is_match(str_from_parts(p.add(l_off + 1), *p.add(l_off) as usize))
         )),
         Err(err) => Err(InvalidLike(err)),
       }
@@ -87,11 +86,10 @@ pub unsafe fn one_predicate(e: &Expr, tp: &TablePage) -> Result<Box<dyn Fn(*cons
   }
 }
 
-pub unsafe fn cross_predicate(op: CmpOp, col: (&str, &str), tp: (&TablePage, &TablePage)) -> Result<Box<dyn Fn((*const u8, *const u8)) -> bool>> {
-  let l = tp.0.p().r().get_ci(col.0)?;
+pub unsafe fn cross_predicate(op: CmpOp, col: (&ColInfo, &ColInfo), tp: (&TablePage, &TablePage)) -> Result<Box<dyn Fn((*const u8, *const u8)) -> bool>> {
+  let (l, r) = col;
   let l_idx = (l as *const ColInfo).offset_from(tp.0.cols.as_ptr()) as usize;
   let l_off = l.off as usize;
-  let r = tp.1.p().r().get_ci(col.1)?;
   let r_idx = (r as *const ColInfo).offset_from(tp.1.cols.as_ptr()) as usize;
   let r_off = r.off as usize;
   macro_rules! cmp {

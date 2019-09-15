@@ -35,6 +35,7 @@ pub struct Update<'a> {
 
 #[derive(Debug)]
 pub struct Select<'a> {
+  // None for select *
   pub ops: Option<Vec<Agg<'a>>>,
   pub tables: Vec<&'a str>,
   pub where_: Vec<Expr<'a>>,
@@ -109,7 +110,7 @@ impl<'a> Expr<'a> {
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum CmpOp { Lt, Le, Ge, Gt, Eq, Ne }
 
 #[derive(Debug)]

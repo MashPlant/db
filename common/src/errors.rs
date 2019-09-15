@@ -19,7 +19,6 @@ pub enum Error {
   NoSuchTable(Box<str>),
   NoSuchCol(Box<str>),
   NoSuchIndex(Box<str>),
-  AmbiguousCol(Box<str>),
   InvalidLike(regex::Error),
   InvalidLikeTy(BareTy),
   RecordTyMismatch { expect: BareTy, actual: BareTy },
@@ -36,6 +35,7 @@ pub enum Error {
   InvalidDate { date: Box<str>, reason: chrono::ParseError },
   // this is not supported
   UpdateWithIndex(Box<str>),
+  AmbiguousCol(Box<str>),
   IO(std::io::Error),
   Unk(Box<dyn std::error::Error>),
 }

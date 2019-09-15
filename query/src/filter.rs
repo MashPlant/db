@@ -6,12 +6,15 @@ use physics::*;
 use db::Db;
 use index::Index;
 use crate::{fill_ptr, handle_all};
+use std::borrow::Borrow;
 
 // return true for successfully filtered with index
-unsafe fn try_filter_with_index(where_: &Vec<Expr>, tp: &mut TablePage, db: &mut Db,
-                                pred: &impl Fn(*const u8) -> bool, f: &mut impl FnMut(*mut u8, Rid)) -> bool {
+unsafe fn try_filter_with_index<'a, E: Borrow<Expr<'a>>>(where_: &[E], tp: &TablePage, db: &mut Db,
+                                                         pred: &impl Fn(*const u8) -> bool, f: &mut impl FnMut(*mut u8, Rid)) -> bool {
+  let tp = tp.pr();
   let tp_id = db.id_of(tp) as u32;
   for e in where_ {
+    let e = e.borrow();
     if let Expr::Cmp(op, l, Atom::Lit(r)) = e {
       match r {
         Lit::Null => {}
@@ -77,8 +80,8 @@ unsafe fn try_filter_with_index(where_: &Vec<Expr>, tp: &mut TablePage, db: &mut
 }
 
 // guarantee the `*mut u8` passed to f only comes from DataPage, not from IndexPage
-pub(crate) unsafe fn filter(where_: &Vec<Expr>, tp: &mut TablePage, db: &mut Db,
-                            pred: impl Fn(*const u8) -> bool, mut f: impl FnMut(*mut u8, Rid)) {
+pub(crate) unsafe fn filter<'a, E: Borrow<Expr<'a>>>(where_: &[E], tp: &TablePage, db: &mut Db,
+                                                     pred: impl Fn(*const u8) -> bool, mut f: impl FnMut(*mut u8, Rid)) {
   if !try_filter_with_index(where_, tp, db, &pred, &mut f) {
     for (data, rid) in db.record_iter(tp) {
       if pred(data.as_ptr()) { f(data.as_ptr(), rid); }

@@ -8,3 +8,5 @@ edition = "2018"
 static_assertions = "0.3.3"
 chrono = "0.4"
 regex = "1"
+hashbrown = { version = "0.5", features = ["nightly"] }
+indexmap = "1.2.0"

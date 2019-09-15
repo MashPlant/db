@@ -1,5 +1,3 @@
-use hashbrown::HashSet;
-
 use common::{*, BareTy::*, Error::*};
 use syntax::ast::*;
 use physics::*;
@@ -20,7 +18,7 @@ impl InsertCtx<'_> {
     let mut pks = Vec::new();
     for i in 0..tp.col_num as usize {
       if tp.cols.get_unchecked(i).flags.contains(ColFlags::PRIMARY) {
-        pks.push(tp.p().r().cols.get_unchecked(i));
+        pks.push(tp.pr().cols.get_unchecked(i));
       }
     }
     let pk_set: HashSet<_> = if pks.len() > 1 {

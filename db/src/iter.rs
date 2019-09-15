@@ -6,7 +6,7 @@ use crate::Db;
 
 impl Db {
   pub unsafe fn record_iter(&mut self, tp: &TablePage) -> RecordIter {
-    RecordIter { db: self.p().r(), head: self.id_of(tp) as u32, page: tp.next, slot: 0, slot_size: tp.size }
+    RecordIter { db: self.pr(), head: self.id_of(tp) as u32, page: tp.next, slot: 0, slot_size: tp.size }
   }
 }
 

@@ -73,8 +73,8 @@ impl TablePage {
 
   #[inline(always)]
   pub unsafe fn get_ci<'a>(&mut self, col: &str) -> Result<&'a mut ColInfo> {
-    match self.p().r().names().enumerate().find(|n| n.1 == col) {
-      Some((idx, _)) => Ok(self.p().r().cols.get_unchecked_mut(idx)),
+    match self.pr().names().enumerate().find(|n| n.1 == col) {
+      Some((idx, _)) => Ok(self.pr().cols.get_unchecked_mut(idx)),
       None => return Err(NoSuchCol(col.into())),
     }
   }
