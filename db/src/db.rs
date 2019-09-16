@@ -4,6 +4,7 @@ use memmap::{MmapOptions, MmapMut};
 use physics::*;
 use common::{*, Error::*};
 use syntax::ast::*;
+use unchecked_unwrap::UncheckedUnwrap;
 
 pub struct Db {
   pub(crate) mmap: MmapMut,
@@ -46,7 +47,44 @@ impl Db {
   pub fn create_table(&mut self, c: &CreateTable) -> Result<()> {
     unsafe {
       let dp = self.get_page::<DbPage>(0);
-      self.validate_table(c, &*dp)?;
+
+      // validate table
+      if dp.table_num == MAX_TABLE as u8 { return Err(TableExhausted); }
+      if c.name.len() as u32 >= MAX_TABLE_NAME { return Err(TableNameTooLong(c.name.into())); }
+      if dp.names().find(|&name| name == c.name).is_some() { return Err(DupTable(c.name.into())); }
+      if c.cols.len() >= MAX_COL as usize { return Err(ColTooMany(c.cols.len())); }
+      let mut cols = IndexSet::default();
+      for co in &c.cols {
+        if cols.contains(co.name) { return Err(DupCol(co.name.into())); }
+        if co.name.len() as u32 >= MAX_COL_NAME { return Err(ColNameTooLong(co.name.into())); }
+        cols.insert(co.name);
+      }
+
+      // validate col cons
+      let mut primary_cnt = 0;
+      for cons in &c.cons {
+        if !cols.contains(cons.name) { return Err(NoSuchCol(cons.name.into())); }
+        match cons.kind {
+          TableConsKind::Primary => primary_cnt += 1,
+          TableConsKind::Foreign { table, col } => {
+            let ci = self.get_ci(table, col)?;
+            if !ci.flags.contains(ColFlags::UNIQUE) { return Err(ForeignKeyOnNonUnique(col.into())); }
+          }
+        }
+      }
+
+      // validate size, the size is calculated in the same way as below
+      let mut size = (c.cols.len() as u16 + 31) / 32 * 4; // null bitset
+      for c in &c.cols {
+        size += c.ty.size();
+        if size as usize > MAX_DATA_BYTE { return Err(ColSizeTooBig(size as usize)); }
+      }
+      size = (size + 3) & !3; // at last it should be aligned to keep the alignment of the next slot
+      if size as usize > MAX_DATA_BYTE { return Err(ColSizeTooBig(size as usize)); }
+
+      // now no error can occur, can write to db safely
+
+      // handle each col def
       let (id, tp) = self.allocate_page::<TablePage>();
       let mut size = (c.cols.len() as u16 + 31) / 32 * 4; // null bitset
       for (i, c) in c.cols.iter().enumerate() {
@@ -57,36 +95,50 @@ impl Db {
         ci.index = !0;
         ci.name_len = c.name.len() as u8;
         ci.name.as_mut_ptr().copy_from_nonoverlapping(c.name.as_ptr(), c.name.len());
-        ci.flags.set(ColFlags::NOTNULL, c.notnull); // todo: primary also implies notnull
+        ci.flags.set(ColFlags::NOTNULL, c.notnull);
         ci.foreign_table = !0;
-        // todo: many fields needing to fill, including index
         size += c.ty.size();
-        if size as usize > MAX_DATA_BYTE { return Err(ColSizeTooBig(size as usize)); }
       }
       size = (size + 3) & !3; // at last it should be aligned to keep the alignment of the next slot
-      if size as usize > MAX_DATA_BYTE { return Err(ColSizeTooBig(size as usize)); }
       tp.init(id as u32, size.max(MIN_SLOT_SIZE as u16), c.cols.len() as u8);
+
+      // handle table cons
+      for cons in &c.cons {
+        let (idx, _) = cols.get_full(cons.name).unchecked_unwrap();
+        let ci = tp.cols.get_unchecked_mut(idx);
+        match cons.kind {
+          TableConsKind::Primary => {
+            ci.flags.set(ColFlags::PRIMARY, true);
+            ci.flags.set(ColFlags::NOTNULL, true);
+            if primary_cnt == 1 { ci.flags.set(ColFlags::UNIQUE, true); }
+          }
+          TableConsKind::Foreign { table, col } => {
+            let f_ti = self.get_ti(table).unchecked_unwrap();
+            let f_ti_idx = f_ti.p().offset_from(dp.tables.as_mut_ptr()) as u8;
+            let f_tp = self.get_page::<TablePage>(f_ti.meta as usize);
+            let f_ci = f_tp.get_ci(col).unchecked_unwrap();
+            let f_ci_idx = f_tp.id_of(f_ci) as u8;
+            ci.foreign_table = f_ti_idx;
+            ci.foreign_col = f_ci_idx;
+          }
+        }
+      }
+
+      // update table info in meta page
       let ti = dp.tables.get_unchecked_mut(dp.table_num as usize);
       ti.meta = id as u32;
       ti.name_len = c.name.len() as u8;
       ti.name.as_mut_ptr().copy_from_nonoverlapping(c.name.as_ptr(), c.name.len());
       dp.table_num += 1;
+
+      for idx in 0..tp.col_num as usize {
+        let ci = tp.cols.get_unchecked_mut(idx);
+        if ci.flags.contains(ColFlags::UNIQUE) {
+          self.create_index_impl(ci);
+        }
+      }
       Ok(())
     }
-  }
-
-  unsafe fn validate_table(&mut self, c: &CreateTable, dp: &DbPage) -> Result<()> {
-    if dp.table_num == MAX_TABLE as u8 { return Err(TableExhausted); }
-    if c.name.len() as u32 >= MAX_TABLE_NAME { return Err(TableNameTooLong(c.name.into())); }
-    if dp.names().find(|&name| name == c.name).is_some() { return Err(DupTable(c.name.into())); }
-    if c.cols.len() >= MAX_COL as usize { return Err(ColTooMany(c.cols.len())); }
-    let mut cols = HashSet::new();
-    for co in &c.cols {
-      if cols.contains(co.name) { return Err(DupCol(co.name.into())); }
-      cols.insert(co.name);
-      if co.name.len() as u32 >= MAX_COL_NAME { return Err(ColNameTooLong(co.name.into())); }
-    }
-    Ok(())
   }
 
   pub fn drop_table(&mut self, name: &str) -> Result<()> {
@@ -97,6 +149,12 @@ impl Db {
       dp.tables.get_unchecked_mut(idx).p().swap(dp.tables.get_unchecked_mut(dp.table_num as usize - 1));
       dp.table_num -= 1;
       let tp = self.get_page::<TablePage>(meta as usize);
+      for i in 0..tp.col_num as usize {
+        let ci = tp.cols.get_unchecked_mut(i);
+        if ci.index != !0 {
+          self.drop_index_impl(ci);
+        }
+      }
       let mut cur = tp.next;
       loop {
         // both TablePage and DataPage use [1] as next, [0] as prev
@@ -105,7 +163,6 @@ impl Db {
         cur = nxt;
         if cur == meta { break; }
       }
-      // todo: drop index
       Ok(())
     }
   }
@@ -115,24 +172,45 @@ impl Db {
   pub fn create_index(&mut self, table: &str, col: &str) -> Result<()> {
     unsafe {
       let tp = self.get_ti(table)?.meta as usize;
-      let tp = self.get_page::<TablePage>(tp) ;
+      let tp = self.get_page::<TablePage>(tp);
       if self.record_iter(tp).count() != 0 { return Err(CreateIndexOnNonEmpty(table.into())); }
       let ci = tp.get_ci(col)?;
       if ci.index != !0 { return Err(DupIndex(col.into())); }
-      let (id, ip) = self.allocate_page::<IndexPage>();
-      ci.index = id as u32;
-      ip.init(true, ci.ty.size()); // it is the root, but also a leaf
+      self.create_index_impl(ci);
       Ok(())
     }
+  }
+
+  unsafe fn create_index_impl(&mut self, ci: &mut ColInfo) {
+    let (id, ip) = self.allocate_page::<IndexPage>();
+    ci.index = id as u32;
+    ip.init(true, ci.ty.size()); // it is the root, but also a leaf
   }
 
   pub fn drop_index(&mut self, table: &str, col: &str) -> Result<()> {
     unsafe {
       let ci = self.get_ci(table, col)?;
       if ci.index == !0 { return Err(NoSuchIndex(col.into())); }
-      // todo free all pages used by index
+      if ci.flags.contains(ColFlags::UNIQUE) { return Err(DropIndexOnUnique(col.into())); }
+      self.drop_index_impl(ci);
       Ok(())
     }
+  }
+
+  unsafe fn drop_index_impl(&mut self, ci: &mut ColInfo) {
+    unsafe fn dfs(db: &mut Db, page: usize) {
+      let ip = db.get_page::<IndexPage>(page);
+      let (slot_size, key_size) = (ip.slot_size() as usize, ip.key_size() as usize);
+      macro_rules! at_ch { ($pos: expr) => { *(ip.data.as_mut_ptr().add($pos * slot_size + key_size) as *mut u32) }; }
+      if !ip.leaf {
+        for i in 0..ip.count as usize {
+          dfs(db, at_ch!(i) as usize);
+        }
+      }
+      db.deallocate_page(page);
+    }
+    dfs(self, ci.index as usize);
+    ci.index = !0;
   }
 }
 
@@ -229,9 +307,8 @@ impl Db {
     if dp.count == tp.cap { // not in free list, add it
       dp.next_free = tp.first_free;
       tp.first_free = page;
-    } else if dp.count == 1 {
-      // todo: free it, give back to db
     }
+    // it is never given back to db, for simplicity
     dp.count -= 1;
   }
 

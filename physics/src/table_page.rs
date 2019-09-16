@@ -2,12 +2,12 @@ use common::{*, Error::*};
 
 bitflags::bitflags! {
   pub struct ColFlags: u32 {
-    // Primary implies NotNull, but doesn't imply Unique
+    // PRIMARY implies NOTNULL, but doesn't imply UNIQUE
+    // PRIMARY itself is only useful when their is multiple primary key, if it is a single primary key,
+    // UNIQUE will be set, UNIQUE and NOTNULL will detect all errors
     const PRIMARY = 0b1;
     const NOTNULL = 0b10;
     const UNIQUE = 0b100;
-    // not a composite primary key
-    const UNIQUE_PRIMARY = Self::PRIMARY.bits | Self::UNIQUE.bits;
   }
 }
 
@@ -18,9 +18,9 @@ pub struct ColInfo {
   pub off: u16,
   // index root page id, !0 for none
   pub index: u32,
-  // point to the TableInfo in DbPage, !0 for none
+  // index in DbPage::tables, !0 for none
   pub foreign_table: u8,
-  // point to the ColInfo in TablePage, if foreign_table == !0, foreign_col is meaningless
+  // index in TablePage::cols, if foreign_table == !0, foreign_col is meaningless
   pub foreign_col: u8,
   pub flags: ColFlags,
   pub name_len: u8,
