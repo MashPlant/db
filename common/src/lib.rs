@@ -68,17 +68,18 @@ pub unsafe fn str_from_parts<'a>(data: *const u8, len: usize) -> &'a str {
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BareTy { Int, Bool, Float, Char, VarChar, Date }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ColTy {
   pub ty: BareTy,
   pub size: u8,
 }
 
 impl ColTy {
+  #[cfg_attr(tarpaulin, skip)]
   fn _ck() {
     assert_eq_size!(ColTy, u16);
     assert_eq_size!(chrono::NaiveDate, u32);

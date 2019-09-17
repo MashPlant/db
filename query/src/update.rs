@@ -8,8 +8,7 @@ use crate::{predicate::one_where, filter::filter, fill_ptr};
 
 pub fn update(u: &Update, db: &mut Db) -> Result<()> {
   unsafe {
-    let ti = db.get_ti(u.table)?;
-    let tp = db.get_page::<TablePage>(ti.meta as usize);
+    let tp = db.get_tp(u.table)?;
     let pred = one_where(&u.where_, u.table, tp)?;
 
     let buf = Align4U8::new(tp.size as usize); // this is only for error checking

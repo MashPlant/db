@@ -21,4 +21,5 @@ impl DataPage {
   }
 }
 
+#[cfg_attr(tarpaulin, skip)]
 fn _ck() { const_assert_eq!(std::mem::size_of::<DataPage>(), common::PAGE_SIZE); }

@@ -9,6 +9,7 @@ members = [
   "index",
   "query",
   "common",
+  "tests",
 ]
 
 [profile.dev.overrides."parser-macros"]

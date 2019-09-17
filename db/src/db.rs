@@ -2,7 +2,7 @@ use std::{fs::{File, OpenOptions}, path::Path, mem};
 use memmap::{MmapOptions, MmapMut};
 
 use physics::*;
-use common::{*, Error::*};
+use common::{*, Error::*, BareTy::*};
 use syntax::ast::*;
 use unchecked_unwrap::UncheckedUnwrap;
 
@@ -63,14 +63,23 @@ impl Db {
       // validate col cons
       let mut primary_cnt = 0;
       for cons in &c.cons {
-        if !cols.contains(cons.name) { return Err(NoSuchCol(cons.name.into())); }
-        match cons.kind {
-          TableConsKind::Primary => primary_cnt += 1,
-          TableConsKind::Foreign { table, col } => {
-            let ci = self.get_ci(table, col)?;
-            if !ci.flags.contains(ColFlags::UNIQUE) { return Err(ForeignKeyOnNonUnique(col.into())); }
+        if let Some((idx, _)) = cols.get_full(cons.name) {
+          match cons.kind {
+            TableConsKind::Primary => primary_cnt += 1,
+            TableConsKind::Foreign { table, col } => {
+              let ci = self.get_ci(table, col)?;
+              if !ci.flags.contains(ColFlags::UNIQUE) { return Err(ForeignKeyOnNonUnique(col.into())); }
+              let (f_ty, ty) = (ci.ty, c.cols[idx].ty);
+              // strict here, don't allow foreign link between two types or shorter string to longer string
+              // (for simplicity of future handling)
+              match (f_ty.ty, ty.ty) {
+                (Char, Char) | (Char, VarChar) | (VarChar, Char) | (VarChar, VarChar) if ty.size >= f_ty.size => {}
+                (Int, Int) | (Bool, Bool) | (Float, Float) | (Date, Date) => {}
+                _ => return Err(IncompatibleForeignTy { foreign: f_ty, own: ty }),
+              }
+            }
           }
-        }
+        } else { return Err(NoSuchCol(cons.name.into())); }
       }
 
       // validate size, the size is calculated in the same way as below
@@ -145,6 +154,15 @@ impl Db {
     unsafe {
       let dp = self.get_page::<DbPage>(0);
       let idx = self.get_ti(name)?.p().offset_from(dp.tables.as_ptr()) as usize;
+      for i in 0..dp.table_num as usize {
+        let tp = self.get_page::<TablePage>(dp.tables.get_unchecked(i).meta as usize);
+        for j in 0..tp.col_num as usize {
+          let ci = tp.cols.get_unchecked(j);
+          if ci.foreign_table == idx as u8 {
+            return Err(DropTableWithForeignLink(name.into()));
+          }
+        }
+      }
       let meta = dp.tables.get_unchecked(idx).meta;
       dp.tables.get_unchecked_mut(idx).p().swap(dp.tables.get_unchecked_mut(dp.table_num as usize - 1));
       dp.table_num -= 1;
@@ -254,6 +272,11 @@ impl Db {
       Some((idx, _)) => Ok(dp.tables.get_unchecked_mut(idx)),
       None => Err(NoSuchTable(table.into())),
     }
+  }
+
+  #[inline(always)]
+  pub unsafe fn get_tp<'a>(&mut self, table: &str) -> Result<&'a mut TablePage> {
+    self.get_ti(table).map(|ti| self.get_page::<TablePage>(ti.meta as usize))
   }
 
   #[inline(always)]

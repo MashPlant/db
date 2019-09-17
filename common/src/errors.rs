@@ -1,6 +1,6 @@
-use std::fmt;
+use std::{fmt, io::Error as IOError, error};
 
-use crate::{MAGIC_LEN, BareTy, LitTy, OwnedLit};
+use crate::{MAGIC_LEN, ColTy, BareTy, LitTy, OwnedLit};
 
 #[derive(Debug)]
 pub enum Error {
@@ -21,8 +21,10 @@ pub enum Error {
   NoSuchTable(Box<str>),
   NoSuchCol(Box<str>),
   NoSuchIndex(Box<str>),
+  DropTableWithForeignLink(Box<str>),
   InvalidLike(regex::Error),
   InvalidLikeTy(BareTy),
+  IncompatibleForeignTy { foreign: ColTy, own: ColTy },
   RecordTyMismatch { expect: BareTy, actual: BareTy },
   RecordLitTyMismatch { expect: BareTy, actual: LitTy },
   InsertLenMismatch { expect: u8, actual: usize },
@@ -38,21 +40,16 @@ pub enum Error {
   // this is not supported
   UpdateWithIndex(Box<str>),
   AmbiguousCol(Box<str>),
-  IO(std::io::Error),
-  Unk(Box<dyn std::error::Error>),
+  IO(IOError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-impl From<std::io::Error> for Error {
-  fn from(e: std::io::Error) -> Self { Error::IO(e) }
+impl From<IOError> for Error {
+  fn from(e: IOError) -> Self { Error::IO(e) }
 }
 
-impl From<Box<dyn std::error::Error>> for Error {
-  fn from(e: Box<dyn std::error::Error>) -> Self { Error::Unk(e) }
-}
-
-impl std::error::Error for Error {}
+impl error::Error for Error {}
 
 impl fmt::Display for Error {
   fn fmt(&self, f: &mut fmt::Formatter) -> std::result::Result<(), fmt::Error> {

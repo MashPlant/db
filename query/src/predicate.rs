@@ -36,6 +36,9 @@ pub unsafe fn one_predicate(e: &Expr, tp: &TablePage) -> Result<Box<dyn Fn(*cons
           (Int, Lit::Int(v)) => handle_op!(cmp, op, p, *(p.add(l_off) as *const i32), v),
           (Bool, Lit::Bool(v)) => handle_op!(cmp, op, p, *(p.add(l_off) as *const bool), v),
           (Float, Lit::Float(v)) => handle_op!(cmp, op, p, *(p.add(l_off) as *const f32), v),
+          // convert int to float for comparison, below (occurs twice) are the same
+          (Int, Lit::Float(v)) => handle_op!(cmp, op, p, *(p.add(l_off) as *const i32) as f32, v),
+          (Float, Lit::Int(v)) => handle_op!(cmp, op, p, *(p.add(l_off) as *const f32), v as f32),
           (Char, Lit::Str(v)) | (VarChar, Lit::Str(v)) => {
             let v = Box::<str>::from(v);
             handle_op!(cmp, op, p, str_from_parts(p.add(l_off + 1), *p.add(l_off) as usize), v.as_ref())
@@ -63,6 +66,8 @@ pub unsafe fn one_predicate(e: &Expr, tp: &TablePage) -> Result<Box<dyn Fn(*cons
           (Int, Int) => handle_op!(cmp, op, p, *(p.add(l_off) as *const i32), *(p.add(r_off) as *const i32)),
           (Bool, Bool) => handle_op!(cmp, op, p, *(p.add(l_off) as *const bool), *(p.add(r_off) as *const bool)),
           (Float, Float) => handle_op!(cmp, op, p, *(p.add(l_off) as *const f32), *(p.add(r_off) as *const f32)),
+          (Int, Float) => handle_op!(cmp, op, p, *(p.add(l_off) as *const i32) as f32, *(p.add(r_off) as *const f32)),
+          (Float, Int) => handle_op!(cmp, op, p, *(p.add(l_off) as *const f32), *(p.add(r_off) as *const i32) as f32),
           (Char, Char) | (Char, VarChar) | (VarChar, Char) | (VarChar, VarChar) =>
             handle_op!(cmp, op, p, str_from_parts(p.add(l_off + 1), *p.add(l_off) as usize),
                 str_from_parts(p.add(r_off + 1), *p.add(r_off) as usize)),
@@ -105,6 +110,8 @@ pub unsafe fn cross_predicate(op: CmpOp, col: (&ColInfo, &ColInfo), tp: (&TableP
     (Int, Int) => handle_op!(cmp, op, p, *(p.0.add(l_off) as *const i32), *(p.1.add(r_off) as *const i32)),
     (Bool, Bool) => handle_op!(cmp, op, p, *(p.0.add(l_off) as *const bool), *(p.1.add(r_off) as *const bool)),
     (Float, Float) => handle_op!(cmp, op, p, *(p.0.add(l_off) as *const f32), *(p.1.add(r_off) as *const f32)),
+    (Int, Float) => handle_op!(cmp, op, p, *(p.0.add(l_off) as *const i32) as f32, *(p.1.add(r_off) as *const f32)),
+    (Float, Int) => handle_op!(cmp, op, p, *(p.0.add(l_off) as *const f32), *(p.1.add(r_off) as *const i32) as f32),
     (Char, Char) | (Char, VarChar) | (VarChar, Char) | (VarChar, VarChar) =>
       handle_op!(cmp, op, p, str_from_parts(p.0.add(l_off + 1), *p.0.add(l_off) as usize),
                 str_from_parts(p.1.add(r_off + 1), *p.1.add(r_off) as usize)),

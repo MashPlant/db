@@ -1,3 +1,4 @@
+#![allow(incomplete_features)]
 #![feature(const_generics)]
 
 use std::{ptr::NonNull, marker::PhantomData, cmp::Ordering};
@@ -59,9 +60,9 @@ impl<const T: BareTy> Index<{ T }> {
     macro_rules! at_ch { ($pos: expr) => { *(ip.data.as_mut_ptr().add($pos * slot_size + key_size) as *mut u32) }; }
     macro_rules! insert {
       ($pos: expr, $x: expr) => {
-        ip.count += 1;
         at!($pos + 1).copy_from(at!($pos), (ip.count as usize - $pos) * slot_size);
         at!($pos).copy_from_nonoverlapping($x, key_size);
+        ip.count += 1;
       };
     }
     if ip.leaf {
@@ -127,6 +128,9 @@ impl<const T: BareTy> Index<{ T }> {
           debug_assert_eq!(lp.cap, rp.cap); // but they mey not be equal to ip.cap
           if lp.count + rp.count < lp.cap { // do merge
             debug_assert!(lp.count + rp.count >= lp.cap / 2);
+            if rp.next == 0 {
+              lp.next = rp.next;
+            }
             lp.next = rp.next;
             lp.data.as_mut_ptr().add(lp.count as usize * slot_size)
               .copy_from_nonoverlapping(rp.data.as_ptr(), rp.count as usize * slot_size);
@@ -168,7 +172,7 @@ impl<const T: BareTy> Index<{ T }> {
 
   fn debug_check(&self, page: usize, ip: &IndexPage) {
     debug_assert_eq!(ip.cap, MAX_INDEX_BYTES as u16 / ip.slot_size());
-    debug_assert!(ip.count < ip.cap);
+    debug_assert!(ip.count < ip.cap); // cannot have count == cap, the code depends on it
     debug_assert!(page == self.root as usize || ip.cap / 2 <= ip.count);
     debug_assert!(ip.leaf || ip.next == !0);
     debug_assert_eq!(ip.rid_off, self.rid_off);

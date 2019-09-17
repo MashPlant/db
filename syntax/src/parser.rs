@@ -91,7 +91,7 @@ impl<'p> Parser {
   #[rule(Stmt -> Create DataBase Id)]
   fn stmt_create_db(_: Token, _: Token, t: Token) -> Stmt<'p> { Stmt::CreateDb(t.str()) }
   #[rule(Stmt -> Drop DataBase Id)]
-  fn stmt_drop_db(_: Token, _: Token, t: Token) -> Stmt<'p> { Stmt::CreateDb(t.str()) }
+  fn stmt_drop_db(_: Token, _: Token, t: Token) -> Stmt<'p> { Stmt::DropDb(t.str()) }
   #[rule(Stmt -> Use Id)]
   fn stmt_use_db(_: Token, t: Token) -> Stmt<'p> { Stmt::UseDb(t.str()) }
   #[rule(Stmt -> Drop Table Id)]

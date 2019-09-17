@@ -32,7 +32,10 @@ impl InsertCtx<'_> {
     let mut ctx = InsertCtx::build(db, ti.meta as usize);
     let slot_size = ctx.tp.size as usize;
     let buf = Align4U8::new(slot_size);
+//    let mut cnt = 0;
     for vals in &i.vals {
+//      cnt += 1;
+//      eprintln!("{}", cnt);
       ctx.fill_buf(buf.ptr, vals)?;
       ctx.insert_ck(buf.ptr, vals, db)?;
       // now it can't fail, do insert
@@ -79,12 +82,12 @@ impl InsertCtx<'_> {
   unsafe fn insert_ck(&mut self, data: *const u8, vals: &Vec<Lit>, db: &mut Db) -> Result<()> {
     debug_assert_eq!(vals.len(), self.tp.col_num as usize); // fill_buf guarantees this
     for i in 0..vals.len() {
-      let col = self.tp.cols.get_unchecked(i);
-      let mut ptr = data.add(col.off as usize);
-      if col.flags.contains(ColFlags::UNIQUE) { // all unique keys have index
-        debug_assert_ne!(col.index, !0);
-        if !is_null(data, i) {
-          // null item doesn't need uniqueness check
+      // below are unique check and foreign check, null item doesn't need them (null check is in `fill_buf`)
+      if !is_null(data, i) {
+        let col = self.tp.cols.get_unchecked(i);
+        let ptr = data.add(col.off as usize);
+        if col.flags.contains(ColFlags::UNIQUE) { // all unique keys have index
+          debug_assert_ne!(col.index, !0);
           macro_rules! handle {
             ($ty: ident) => {{
               let index = Index::<{ $ty }>::new(db, Rid::new(self.table_page as u32, i as u32));
@@ -95,35 +98,22 @@ impl InsertCtx<'_> {
           }
           handle_all!(col.ty.ty, handle);
         }
-      }
-      if col.foreign_table != !0 {
-        let dp = db.get_page::<DbPage>(0);
-        debug_assert!(col.foreign_table < dp.table_num);
-        let f_table_page = db.get_page::<DbPage>(0).tables.get_unchecked(col.foreign_table as usize).meta;
-        let f_tp = db.get_page::<TablePage>(f_table_page as usize);
-        debug_assert!(col.foreign_col < f_tp.col_num);
-        let f_col = f_tp.cols.get_unchecked(col.foreign_col as usize);
-        macro_rules! handle {
-          ($ty: ident) => {{
-            let index = Index::<{ $ty }>::new(db, Rid::new(f_table_page, col.foreign_col as u32));
-            if !index.contains(ptr) {
-              return Err(InsertNoExistOnForeignKey { col: col.name().into(), val: vals.get_unchecked(i).to_owned() });
-            }
-          }};
-        }
-        match col.ty.ty {
-          Int => handle!(Int), Bool => handle!(Bool), Float => handle!(Float), Date => handle!(Date),
-          // the string in this col and foreign col may have different length
-          // since Index will access as much memory as foreign col's string, if it is longer than this col's
-          // it may cause access violation
-          Char | VarChar => if col.ty.size >= f_col.ty.size { // this col's string is not shorter, no need of special treatment
-            handle!(Char) // actually Char and VarChar are handled in the same way
-          } else {
-            let tmp = Align4U8::new(f_col.ty.size as usize + 1);
-            tmp.ptr.copy_from_nonoverlapping(ptr, col.ty.size as usize + 1);
-            ptr = tmp.ptr; // `handle` use this `ptr` instead of the previous one
-            handle!(Char)
+        if col.foreign_table != !0 {
+          let dp = db.get_page::<DbPage>(0);
+          debug_assert!(col.foreign_table < dp.table_num);
+          let f_table_page = db.get_page::<DbPage>(0).tables.get_unchecked(col.foreign_table as usize).meta;
+          let f_tp = db.get_page::<TablePage>(f_table_page as usize);
+          debug_assert!(col.foreign_col < f_tp.col_num);
+          macro_rules! handle {
+            ($ty: ident) => {{
+              let index = Index::<{ $ty }>::new(db, Rid::new(f_table_page, col.foreign_col as u32));
+              if !index.contains(ptr) {
+                return Err(InsertNoExistOnForeignKey { col: col.name().into(), val: vals.get_unchecked(i).to_owned() });
+              }
+            }};
           }
+          // in `db.rs` we already guarantee their types are compatible, and if they are both string, the inserted one must be longer
+          handle_all!(col.ty.ty, handle);
         }
       }
     }

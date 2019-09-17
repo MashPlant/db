@@ -2,9 +2,19 @@ fn main() {
   use syntax::*;
   use driver::Eval;
 
-  let file: &[u8] = include_bytes!("../../tmp/tmp.sql");
-  let sl = Parser.parse(Lexer::new(file)).unwrap();
+  let file: &[u8] = include_bytes!("../../tests/sql/create.sql");
+  let sl = Parser.parse(&mut Lexer::new(file)).unwrap();
   let mut e = Eval::new();
+  for s in &sl {
+    println!(">> {:?}", s);
+    match e.exec(s) {
+      Ok(msg) => print!("{}", msg),
+      Err(err) => println!("Error: {}", err),
+    }
+  }
+
+  let file: &[u8] = include_bytes!("../../tests/sql/customer.sql");
+  let sl = Parser.parse(&mut Lexer::new(file)).unwrap();
   for s in &sl {
     println!(">> {:?}", s);
     match e.exec(s) {

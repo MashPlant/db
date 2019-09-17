@@ -93,8 +93,7 @@ pub fn select(s: &Select, db: &mut Db) -> Result<SelectResult> {
     let mut tbls = IndexMap::default();
     let mut cols = HashMap::new();
     for (idx, &t) in s.tables.iter().enumerate() {
-      let ti = db.get_ti(t)?;
-      let tp = db.get_page::<TablePage>(ti.meta as usize);
+      let tp = db.get_tp(t)?;
       match tbls.entry(t) {
         IndexEntry::Occupied(_) => return Err(DupTable(t.into())),
         IndexEntry::Vacant(v) => { v.insert(tp.prc()); }
@@ -174,35 +173,3 @@ pub fn select(s: &Select, db: &mut Db) -> Result<SelectResult> {
     Ok(SelectResult { tbl: result_tbl, data: res_l })
   }
 }
-
-
-//    let preds = Vec::with_capacity(s.tables.len());
-
-//    if s.tables.len() == 1 {
-//      let table = s.tables[0];
-//      let ti = db.get_ti(table)?;
-//      let tp = db.get_page::<TablePage>(ti.meta as usize);
-//      let pred = one_where(&s.where_, table, tp)?;
-//      let col = if let Some(ops) = &s.ops {
-//        let mut col = Vec::with_capacity(ops.len());
-//        for op in ops {
-//          match op.op {
-//            AggOp::None => {
-//              if let Some(t) = op.col.table {
-//                if t != table { return Err(NoSuchTable(t.into())); }
-//              }
-//              col.push(&*tp.get_ci(op.col.col)?);
-//            }
-//            _ => unimplemented!()
-//          }
-//        }
-//        col
-//      } else { // select *
-//        (0..tp.col_num as usize).map(|i| &*tp.cols.get_unchecked(i).p()).collect()
-//      };
-//      let mut data = Vec::new();
-//      filter(&s.where_, tp, db, pred, |data1, _| data.push(data1 as *const u8));
-//      Ok(SelectResult { col, data: vec![data] })
-//    } else {
-//      unimplemented!()
-//    }

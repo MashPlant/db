@@ -44,4 +44,8 @@ impl DbPage {
   }
 }
 
-fn _ck() { const_assert_eq!(std::mem::size_of::<DbPage>(), common::PAGE_SIZE); }
+#[cfg_attr(tarpaulin, skip)]
+fn _ck() {
+  const_assert_eq!(std::mem::size_of::<TableInfo>(), 64);
+  const_assert_eq!(std::mem::size_of::<DbPage>(), common::PAGE_SIZE);
+}

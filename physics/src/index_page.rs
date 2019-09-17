@@ -21,6 +21,7 @@ impl IndexPage {
     self.next = !0;
     self.count = 0;
     self.leaf = leaf;
+    // it doesn't have to care about MIN_SLOT_SIZE, because it won't be pointed by Rid
     self.rid_off = (ty_size + 3) & !3;
     self.cap = MAX_INDEX_BYTES as u16 / self.slot_size();
   }
@@ -31,4 +32,5 @@ impl IndexPage {
   pub fn slot_size(&self) -> u16 { self.key_size() + if self.leaf { 0 } else { 4 } }
 }
 
+#[cfg_attr(tarpaulin, skip)]
 fn _ck() { const_assert_eq!(std::mem::size_of::<IndexPage>(), common::PAGE_SIZE); }

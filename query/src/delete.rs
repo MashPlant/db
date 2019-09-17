@@ -7,8 +7,7 @@ use crate::{handle_all, predicate::one_where, is_null, filter::filter};
 
 pub fn delete(d: &Delete, db: &mut Db) -> Result<()> {
   unsafe {
-    let ti = db.get_ti(d.table)?;
-    let tp = db.get_page::<TablePage>(ti.meta as usize);
+    let tp = db.get_tp(d.table)?;
     let table_page = db.id_of(tp);
     let pred = one_where(&d.where_, d.table, tp)?;
     let mut del = Vec::new();

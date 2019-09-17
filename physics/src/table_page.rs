@@ -1,7 +1,7 @@
 use common::{*, Error::*};
 
 bitflags::bitflags! {
-  pub struct ColFlags: u32 {
+  pub struct ColFlags: u8 {
     // PRIMARY implies NOTNULL, but doesn't imply UNIQUE
     // PRIMARY itself is only useful when their is multiple primary key, if it is a single primary key,
     // UNIQUE will be set, UNIQUE and NOTNULL will detect all errors
@@ -49,17 +49,18 @@ pub struct TablePage {
   // always equal to MAX_DATA_BYTE / size, store it just to avoid division
   pub cap: u16,
   pub col_num: u8,
-  pub _rsv: [u8; 45],
+  pub _rsv: [u8; 43],
   pub cols: [ColInfo; MAX_COL as usize],
 }
 
-pub const MAX_COL_NAME: u32 = 50;
+pub const MAX_COL_NAME: u32 = 52;
 pub const MAX_COL: u32 = 127;
 
 impl TablePage {
   #[inline(always)]
   pub fn init(&mut self, id: u32, size: u16, col_num: u8) {
     (self.prev = id, self.next = id);  // self-circle to represent empty linked list
+    self.first_free = !0;
     self.count = 0;
     self.size = size;
     self.cap = MAX_DATA_BYTE as u16 / size;
@@ -83,4 +84,10 @@ impl TablePage {
   pub unsafe fn id_of(&self, col: &ColInfo) -> usize {
     (col as *const ColInfo).offset_from(self.cols.as_ptr()) as usize
   }
+}
+
+#[cfg_attr(tarpaulin, skip)]
+fn _ck() {
+  const_assert_eq!(std::mem::size_of::<ColInfo>(), 64);
+  const_assert_eq!(std::mem::size_of::<TablePage>(), common::PAGE_SIZE);
 }

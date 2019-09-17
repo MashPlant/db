@@ -41,4 +41,5 @@ impl fmt::Debug for Rid {
   }
 }
 
+#[cfg_attr(tarpaulin, skip)]
 fn _ck() { assert_eq_size!(Rid, u32); }
