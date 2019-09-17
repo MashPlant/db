@@ -15,12 +15,7 @@ struct InsertCtx<'a> {
 impl InsertCtx<'_> {
   unsafe fn build<'a>(db: &mut Db, table_page: usize) -> InsertCtx<'a> {
     let tp = db.get_page::<TablePage>(table_page);
-    let mut pks = Vec::new();
-    for i in 0..tp.col_num as usize {
-      if tp.cols.get_unchecked(i).flags.contains(ColFlags::PRIMARY) {
-        pks.push(tp.pr().cols.get_unchecked(i));
-      }
-    }
+    let pks = tp.cols().iter().filter(|ci| ci.flags.contains(ColFlags::PRIMARY)).collect::<Vec<_>>();
     let pk_set: HashSet<_> = if pks.len() > 1 {
       db.record_iter(tp).map(|(data, _)| Self::hash_pks(data.as_ptr(), &pks)).collect()
     } else { HashSet::new() }; // no need to collect

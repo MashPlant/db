@@ -140,12 +140,9 @@ impl Db {
       ti.name.as_mut_ptr().copy_from_nonoverlapping(c.name.as_ptr(), c.name.len());
       dp.table_num += 1;
 
-      for idx in 0..tp.col_num as usize {
-        let ci = tp.cols.get_unchecked_mut(idx);
-        if ci.flags.contains(ColFlags::UNIQUE) {
-          self.create_index_impl(ci);
-        }
-      }
+      tp.cols_mut().iter_mut()
+        .filter(|ci| ci.flags.contains(ColFlags::UNIQUE))
+        .for_each(|ci| self.create_index_impl(ci));
       Ok(())
     }
   }
@@ -154,10 +151,9 @@ impl Db {
     unsafe {
       let dp = self.get_page::<DbPage>(0);
       let idx = self.get_ti(name)?.p().offset_from(dp.tables.as_ptr()) as usize;
-      for i in 0..dp.table_num as usize {
-        let tp = self.get_page::<TablePage>(dp.tables.get_unchecked(i).meta as usize);
-        for j in 0..tp.col_num as usize {
-          let ci = tp.cols.get_unchecked(j);
+      for ti in dp.tables() {
+        let tp = self.get_page::<TablePage>(ti.meta as usize);
+        for ci in tp.cols() {
           if ci.foreign_table == idx as u8 {
             return Err(DropTableWithForeignLink(name.into()));
           }
@@ -167,12 +163,7 @@ impl Db {
       dp.tables.get_unchecked_mut(idx).p().swap(dp.tables.get_unchecked_mut(dp.table_num as usize - 1));
       dp.table_num -= 1;
       let tp = self.get_page::<TablePage>(meta as usize);
-      for i in 0..tp.col_num as usize {
-        let ci = tp.cols.get_unchecked_mut(i);
-        if ci.index != !0 {
-          self.drop_index_impl(ci);
-        }
-      }
+      tp.cols_mut().iter_mut().filter(|ci| ci.index != !0).for_each(|ci| self.drop_index_impl(ci));
       let mut cur = tp.next;
       loop {
         // both TablePage and DataPage use [1] as next, [0] as prev

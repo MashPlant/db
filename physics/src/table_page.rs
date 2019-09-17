@@ -67,9 +67,21 @@ impl TablePage {
     self.col_num = col_num;
   }
 
+  #[inline(always)]
   pub unsafe fn names<'a>(&'a self) -> impl Iterator<Item=&'a str> + 'a {
-    let col_num = self.col_num as usize;
-    self.cols.iter().enumerate().filter_map(move |(i, ci)| if i < col_num { Some(ci.name()) } else { None })
+    self.cols().iter().map(|c| c.name())
+  }
+
+  #[inline(always)]
+  pub unsafe fn cols<'a>(&self) -> &'a [ColInfo] {
+    debug_assert!(self.col_num < MAX_COL as u8);
+    std::slice::from_raw_parts(self.cols.as_ptr(), self.col_num as usize)
+  }
+
+  #[inline(always)]
+  pub unsafe fn cols_mut<'a>(&mut self) -> &'a mut [ColInfo] {
+    debug_assert!(self.col_num < MAX_COL as u8);
+    std::slice::from_raw_parts_mut(self.cols.as_mut_ptr(), self.col_num as usize)
   }
 
   #[inline(always)]

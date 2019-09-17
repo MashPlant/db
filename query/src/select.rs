@@ -78,12 +78,9 @@ unsafe fn mk_tbl<'a>(ops: &Option<Vec<Agg>>, ctx: &InsertCtx) -> Result<Vec<Vec<
         _ => unimplemented!()
       }
     }
-//    col
     Ok(ret)
   } else { // select *
-    Ok(ctx.tbls.iter()
-      .map(|(_, &tp)| (0..tp.col_num as usize).map(|i| tp.cols.get_unchecked(i).prc()).collect())
-      .collect())
+    Ok(ctx.tbls.iter().map(|(_, &tp)| tp.cols().iter().collect()).collect())
   }
 }
 
@@ -98,8 +95,7 @@ pub fn select(s: &Select, db: &mut Db) -> Result<SelectResult> {
         IndexEntry::Occupied(_) => return Err(DupTable(t.into())),
         IndexEntry::Vacant(v) => { v.insert(tp.prc()); }
       }
-      for i in 0..tp.col_num as usize {
-        let ci = tp.pr().cols.get_unchecked(i);
+      for ci in tp.cols() {
         // if it exist, make it None; if it doesn't exist, insert it
         cols.entry(ci.name()).and_modify(|x| *x = None)
           .or_insert(Some((tp.prc(), ci, idx)));

@@ -28,8 +28,8 @@ impl Db {
       let mut s = String::new();
       let selfm = self.pr();
       let dp = selfm.get_page::<DbPage>(0);
-      for i in 0..dp.table_num as usize {
-        let _ = write!(s, "{}", selfm.show_table_info(dp.tables.get_unchecked(i)));
+      for ti in dp.tables() {
+        let _ = write!(s, "{}", selfm.show_table_info(ti));
       }
       s
     }
@@ -40,10 +40,8 @@ impl Db {
     let tp = self.get_page::<TablePage>(ti.meta as usize);
     let _ = writeln!(s, "table `{}`: meta page = {}, record count = {}",
                      str_from_parts(ti.name.as_ptr(), ti.name_len as usize), ti.meta, tp.count);
-    for i in 0..tp.col_num as usize {
-      let ci = tp.cols.get_unchecked(i);
-      let _ = writeln!(s, "  - col {}: `{}`: {:?} @ offset +{}",
-                       i, str_from_parts(ci.name.as_ptr(), ci.name_len as usize), ci.ty, ci.off);
+    for (idx, ci) in tp.cols().iter().enumerate() {
+      let _ = writeln!(s, "  - col {}: `{}`: {:?} @ offset +{}", idx, str_from_parts(ci.name.as_ptr(), ci.name_len as usize), ci.ty, ci.off);
     }
     s
   }
