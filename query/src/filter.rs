@@ -1,18 +1,17 @@
 use unchecked_unwrap::UncheckedUnwrap;
+use std::borrow::Borrow;
 
 use common::{*, BareTy::*};
 use syntax::ast::{*, CmpOp::*};
 use physics::*;
-use db::Db;
+use db::{Db, fill_ptr};
 use index::Index;
-use crate::{fill_ptr, handle_all};
-use std::borrow::Borrow;
+use crate::handle_all;
 
 // return true for successfully filtered with index
-unsafe fn try_filter_with_index<'a, E: Borrow<Expr<'a>>>(where_: &[E], tp: &TablePage, db: &mut Db,
+unsafe fn try_filter_with_index<'a, E: Borrow<Expr<'a>>>(where_: &[E], tp: WithId<&TablePage>, db: &mut Db,
                                                          pred: &impl Fn(*const u8) -> bool, f: &mut impl FnMut(*mut u8, Rid)) -> bool {
-  let tp = tp.pr();
-  let tp_id = db.id_of(tp) as u32;
+  let (tp_id, tp) = tp;
   for e in where_ {
     let e = e.borrow();
     if let Expr::Cmp(op, l, Atom::Lit(r)) = e {
@@ -20,15 +19,14 @@ unsafe fn try_filter_with_index<'a, E: Borrow<Expr<'a>>>(where_: &[E], tp: &Tabl
         Lit::Null => {}
         _ => {
           // safe because `one_predicate` have verified the name
-          let col = tp.get_ci(l.col).unchecked_unwrap();
-          let col_id = tp.id_of(col) as u32; // it may seem a little cumbersome to calculate id again, but doesn't matter much
-          if col.index != !0 {
-            let buf = Align4U8::new(col.ty.size() as usize);
+          let (ci_id, ci) = tp.pr().get_ci(l.col).unchecked_unwrap();
+          if ci.index != !0 {
+            let buf = Align4U8::new(ci.ty.size() as usize);
             // safe because `one_predicate` have verified the type & value format/size
-            fill_ptr(buf.ptr, col.ty, *r).unchecked_unwrap();
+            fill_ptr(buf.ptr, ci.ty, *r).unchecked_unwrap();
             macro_rules! handle {
               ($ty: ident) => {{
-                let mut index = Index::<{ $ty }>::new(db, Rid::new(tp_id, col_id));
+                let mut index = Index::<{ $ty }>::new(db, Rid::new(tp_id as u32, ci_id as u32));
                 match op {
                   Lt => {
                     let (mut it, end) = (index.iter(), index.lower_bound(buf.ptr));
@@ -69,7 +67,7 @@ unsafe fn try_filter_with_index<'a, E: Borrow<Expr<'a>>>(where_: &[E], tp: &Tabl
                 }
               }};
             }
-            handle_all!(col.ty.ty, handle);
+            handle_all!(ci.ty.ty, handle);
             return true;
           }
         }
@@ -80,7 +78,7 @@ unsafe fn try_filter_with_index<'a, E: Borrow<Expr<'a>>>(where_: &[E], tp: &Tabl
 }
 
 // guarantee the `*mut u8` passed to f only comes from DataPage, not from IndexPage
-pub(crate) unsafe fn filter<'a, E: Borrow<Expr<'a>>>(where_: &[E], tp: &TablePage, db: &mut Db,
+pub(crate) unsafe fn filter<'a, E: Borrow<Expr<'a>>>(where_: &[E], tp: WithId<&TablePage>, db: &mut Db,
                                                      pred: impl Fn(*const u8) -> bool, mut f: impl FnMut(*mut u8, Rid)) {
   if !try_filter_with_index(where_, tp, db, &pred, &mut f) {
     for (data, rid) in db.record_iter(tp) {

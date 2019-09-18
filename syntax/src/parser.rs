@@ -194,6 +194,10 @@ impl<'p> Parser {
   fn cons_primary(_: Token, _: Token, il: Vec<&'p str>, _: Token) -> Vec<TableCons<'p>> {
     il.into_iter().map(|name| TableCons { name, kind: TableConsKind::Primary }).collect()
   }
+  #[rule(Cons -> Check LParen Id In LParen LitList RParen RParen)]
+  fn cons_check(_: Token, _: Token, t: Token, _: Token, _: Token, ll: Vec<Lit<'p>>, _: Token, _: Token) -> Vec<TableCons<'p>> {
+    vec![TableCons { name: t.str(), kind: TableConsKind::Check(ll) }]
+  }
 
   #[rule(Agg -> ColRef)]
   fn agg0(col: ColRef<'p>) -> Agg<'p> { Agg { col, op: AggOp::None } }

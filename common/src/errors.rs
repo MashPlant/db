@@ -21,7 +21,9 @@ pub enum Error {
   NoSuchTable(Box<str>),
   NoSuchCol(Box<str>),
   NoSuchIndex(Box<str>),
+  // there is no UpdateTableWithForeignLink, it will be rejected by UpdateWithIndex
   DropTableWithForeignLink(Box<str>),
+  DeleteTableWithForeignLink(Box<str>),
   InvalidLike(regex::Error),
   InvalidLikeTy(BareTy),
   IncompatibleForeignTy { foreign: ColTy, own: ColTy },
@@ -34,12 +36,19 @@ pub enum Error {
   InsertDupOnUniqueKey { col: Box<str>, val: OwnedLit },
   InsertNoExistOnForeignKey { col: Box<str>, val: OwnedLit },
   InsertDupCompositePrimaryKey,
+  InsertNotInCheck { col: Box<str>, val: OwnedLit },
   // CmpOnNull if lit is null (if data in db is null, != returns true, all others returns false)
   CmpOnNull,
   InvalidDate { date: Box<str>, reason: chrono::ParseError },
-  // this is not supported
+  // below 2 not supported
   UpdateWithIndex(Box<str>),
+  UpdateWithCheck(Box<str>),
   AmbiguousCol(Box<str>),
+  DupPrimary(Box<str>),
+  DupForeign(Box<str>),
+  DupCheck(Box<str>),
+  CheckNull(Box<str>),
+  CheckTooLong(Box<str>, usize),
   IO(IOError),
 }
 

@@ -84,10 +84,11 @@ pub struct TableCons<'a> {
   pub kind: TableConsKind<'a>,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 pub enum TableConsKind<'a> {
   Primary,
   Foreign { table: &'a str, col: &'a str },
+  Check(Vec<Lit<'a>>),
 }
 
 #[derive(Debug)]

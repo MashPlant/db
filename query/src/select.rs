@@ -47,14 +47,14 @@ impl fmt::Display for SelectResult {
 }
 
 struct InsertCtx<'a> {
-  tbls: IndexMap<&'a str, &'a TablePage>,
+  tbls: IndexMap<&'a str, WithId<&'a TablePage>>,
   cols: HashMap<&'a str, Option<(&'a TablePage, &'a ColInfo, usize)>>,
 }
 
 unsafe fn one_where<'a>(cr: &ColRef, ctx: &InsertCtx) -> Result<(&'a TablePage, &'a ColInfo, usize)> {
   if let Some(t) = cr.table {
     if let Some((tbl_idx, _, &tp)) = ctx.tbls.get_full(t) {
-      Ok((tp.pr(), tp.pr().get_ci(cr.col)?, tbl_idx))
+      Ok((tp.1.pr(), tp.1.pr().get_ci(cr.col)?.1, tbl_idx))
     } else { Err(NoSuchTable(t.into())) }
   } else {
     match ctx.cols.get(cr.col) {
@@ -80,7 +80,7 @@ unsafe fn mk_tbl<'a>(ops: &Option<Vec<Agg>>, ctx: &InsertCtx) -> Result<Vec<Vec<
     }
     Ok(ret)
   } else { // select *
-    Ok(ctx.tbls.iter().map(|(_, &tp)| tp.cols().iter().collect()).collect())
+    Ok(ctx.tbls.iter().map(|(_, &tp)| tp.1.cols().iter().collect()).collect())
   }
 }
 
@@ -90,10 +90,10 @@ pub fn select(s: &Select, db: &mut Db) -> Result<SelectResult> {
     let mut tbls = IndexMap::default();
     let mut cols = HashMap::new();
     for (idx, &t) in s.tables.iter().enumerate() {
-      let tp = db.get_tp(t)?;
+      let (tp_id, tp) = db.get_tp(t)?;
       match tbls.entry(t) {
         IndexEntry::Occupied(_) => return Err(DupTable(t.into())),
-        IndexEntry::Vacant(v) => { v.insert(tp.prc()); }
+        IndexEntry::Vacant(v) => { v.insert((tp_id, tp.prc())); }
       }
       for ci in tp.cols() {
         // if it exist, make it None; if it doesn't exist, insert it

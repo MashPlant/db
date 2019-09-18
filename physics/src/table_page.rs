@@ -18,6 +18,8 @@ pub struct ColInfo {
   pub off: u16,
   // index root page id, !0 for none
   pub index: u32,
+  // check page id, !0 for none
+  pub check: u32,
   // index in DbPage::tables, !0 for none
   pub foreign_table: u8,
   // index in TablePage::cols, if foreign_table == !0, foreign_col is meaningless
@@ -28,6 +30,18 @@ pub struct ColInfo {
 }
 
 impl ColInfo {
+  #[inline(always)]
+  pub unsafe fn init(&mut self, ty: ColTy, off: u16, name: &str, notnull: bool) {
+    self.ty = ty;
+    self.off = off;
+    self.index = !0;
+    self.check = !0;
+    self.name_len = name.len() as u8;
+    self.name.as_mut_ptr().copy_from_nonoverlapping(name.as_ptr(), name.len());
+    self.flags.set(ColFlags::NOTNULL, notnull);
+    self.foreign_table = !0;
+  }
+
   pub unsafe fn name<'a>(&self) -> &'a str {
     str_from_parts(self.name.as_ptr(), self.name_len as usize)
   }
@@ -36,7 +50,7 @@ impl ColInfo {
 #[repr(C)]
 pub struct TablePage {
   // the prev and next in both TablePage and DataPage forms a circular linked list
-  // initially table.prev = table.next = table page id, for an empty  linked list
+  // initially table.prev = table.next = table page id, for an empty linked list
   // they may be accessed by field ref or by [0] and [1]
   pub prev: u32,
   pub next: u32,
@@ -53,7 +67,7 @@ pub struct TablePage {
   pub cols: [ColInfo; MAX_COL as usize],
 }
 
-pub const MAX_COL_NAME: u32 = 52;
+pub const MAX_COL_NAME: u32 = 48;
 pub const MAX_COL: u32 = 127;
 
 impl TablePage {
@@ -85,16 +99,11 @@ impl TablePage {
   }
 
   #[inline(always)]
-  pub unsafe fn get_ci<'a>(&mut self, col: &str) -> Result<&'a mut ColInfo> {
+  pub unsafe fn get_ci<'a>(&mut self, col: &str) -> Result<WithId<&'a mut ColInfo>> {
     match self.pr().names().enumerate().find(|n| n.1 == col) {
-      Some((idx, _)) => Ok(self.pr().cols.get_unchecked_mut(idx)),
+      Some((idx, _)) => Ok((idx, self.pr().cols.get_unchecked_mut(idx))),
       None => return Err(NoSuchCol(col.into())),
     }
-  }
-
-  #[inline(always)]
-  pub unsafe fn id_of(&self, col: &ColInfo) -> usize {
-    (col as *const ColInfo).offset_from(self.cols.as_ptr()) as usize
   }
 }
 

@@ -31,7 +31,7 @@ fn test() {
     let dp = db.get_page::<DbPage>(0);
     assert_eq!(dp.table_num, 5);
     {
-      let t = db.get_tp("customer").unwrap();
+      let t = db.get_tp("customer").unwrap().1;
       assert_eq!(t.col_num, 3);
       let c = &t.cols[0];
       assert_eq!(c.ty, ColTy { size: 10, ty: Int });
@@ -53,7 +53,7 @@ fn test() {
       assert_eq!(c.name(), "gender");
     }
     {
-      let t = db.get_tp("price").unwrap();
+      let t = db.get_tp("price").unwrap().1;
       assert_eq!(t.col_num, 3);
       let c = &t.cols[0];
       assert_eq!(c.ty, ColTy { size: 10, ty: Int });

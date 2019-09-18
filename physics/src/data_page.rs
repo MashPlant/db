@@ -21,5 +21,17 @@ impl DataPage {
   }
 }
 
+// for simplicity, a check list is one page
+#[repr(C)]
+pub struct CheckPage {
+  pub len: u32,
+  pub data: [u8; MAX_CHECK_BYTES],
+}
+
+pub const MAX_CHECK_BYTES: usize = 8188;
+
 #[cfg_attr(tarpaulin, skip)]
-fn _ck() { const_assert_eq!(std::mem::size_of::<DataPage>(), common::PAGE_SIZE); }
+fn _ck() {
+  const_assert_eq!(std::mem::size_of::<DataPage>(), common::PAGE_SIZE);
+  const_assert_eq!(std::mem::size_of::<CheckPage>(), common::PAGE_SIZE);
+}

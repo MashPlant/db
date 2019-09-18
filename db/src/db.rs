@@ -5,6 +5,7 @@ use physics::*;
 use common::{*, Error::*, BareTy::*};
 use syntax::ast::*;
 use unchecked_unwrap::UncheckedUnwrap;
+use crate::fill_ptr;
 
 pub struct Db {
   pub(crate) mmap: MmapMut,
@@ -62,12 +63,21 @@ impl Db {
 
       // validate col cons
       let mut primary_cnt = 0;
+      // only allow one one primary / foreign / check for one col
+      let mut has_pfc = vec![(false, false, false); c.cons.len()];
+
       for cons in &c.cons {
         if let Some((idx, _)) = cols.get_full(cons.name) {
-          match cons.kind {
-            TableConsKind::Primary => primary_cnt += 1,
-            TableConsKind::Foreign { table, col } => {
-              let ci = self.get_ci(table, col)?;
+          match &cons.kind {
+            TableConsKind::Primary => {
+              if has_pfc[idx].0 { return Err(DupPrimary(cons.name.into())); }
+              has_pfc[idx].0 = true;
+              primary_cnt += 1;
+            }
+            &TableConsKind::Foreign { table, col } => {
+              if has_pfc[idx].1 { return Err(DupForeign(cons.name.into())); }
+              has_pfc[idx].1 = true;
+              let ci = self.get_tp(table)?.1.get_ci(col)?.1;
               if !ci.flags.contains(ColFlags::UNIQUE) { return Err(ForeignKeyOnNonUnique(col.into())); }
               let (f_ty, ty) = (ci.ty, c.cols[idx].ty);
               // strict here, don't allow foreign link between two types or shorter string to longer string
@@ -76,6 +86,20 @@ impl Db {
                 (Char, Char) | (Char, VarChar) | (VarChar, Char) | (VarChar, VarChar) if ty.size >= f_ty.size => {}
                 (Int, Int) | (Bool, Bool) | (Float, Float) | (Date, Date) => {}
                 _ => return Err(IncompatibleForeignTy { foreign: f_ty, own: ty }),
+              }
+            }
+            TableConsKind::Check(check) => {
+              if has_pfc[idx].2 { return Err(DupCheck(cons.name.into())); }
+              has_pfc[idx].2 = true;
+              let ty = c.cols[idx].ty;
+              let sz = ty.size() as usize;
+              if check.len() * sz >= MAX_CHECK_BYTES { return Err(CheckTooLong(cons.name.into(), check.len())); }
+              let buf = Align4U8::new(ty.size() as usize); // dummy buffer
+              for &c in check {
+                match c {
+                  Lit::Null => return Err(CheckNull(cons.name.into())),
+                  _ => fill_ptr(buf.ptr, ty, c)?,
+                }
               }
             }
           }
@@ -98,14 +122,7 @@ impl Db {
       let mut size = (c.cols.len() as u16 + 31) / 32 * 4; // null bitset
       for (i, c) in c.cols.iter().enumerate() {
         if c.ty.align4() { size = (size + 3) & !3; }
-        let ci = tp.cols.get_unchecked_mut(i);
-        ci.ty = c.ty;
-        ci.off = size;
-        ci.index = !0;
-        ci.name_len = c.name.len() as u8;
-        ci.name.as_mut_ptr().copy_from_nonoverlapping(c.name.as_ptr(), c.name.len());
-        ci.flags.set(ColFlags::NOTNULL, c.notnull);
-        ci.foreign_table = !0;
+        tp.cols.get_unchecked_mut(i).init(c.ty, size, c.name, c.notnull);
         size += c.ty.size();
       }
       size = (size + 3) & !3; // at last it should be aligned to keep the alignment of the next slot
@@ -115,20 +132,30 @@ impl Db {
       for cons in &c.cons {
         let (idx, _) = cols.get_full(cons.name).unchecked_unwrap();
         let ci = tp.cols.get_unchecked_mut(idx);
-        match cons.kind {
+        match &cons.kind {
           TableConsKind::Primary => {
             ci.flags.set(ColFlags::PRIMARY, true);
             ci.flags.set(ColFlags::NOTNULL, true);
             if primary_cnt == 1 { ci.flags.set(ColFlags::UNIQUE, true); }
           }
-          TableConsKind::Foreign { table, col } => {
-            let f_ti = self.get_ti(table).unchecked_unwrap();
-            let f_ti_idx = f_ti.p().offset_from(dp.tables.as_mut_ptr()) as u8;
+          &TableConsKind::Foreign { table, col } => {
+            let (f_ti_id, f_ti) = self.get_ti(table).unchecked_unwrap();
             let f_tp = self.get_page::<TablePage>(f_ti.meta as usize);
-            let f_ci = f_tp.get_ci(col).unchecked_unwrap();
-            let f_ci_idx = f_tp.id_of(f_ci) as u8;
-            ci.foreign_table = f_ti_idx;
-            ci.foreign_col = f_ci_idx;
+            let f_ci_id = f_tp.get_ci(col).unchecked_unwrap().0;
+            ci.foreign_table = f_ti_id as u8;
+            ci.foreign_col = f_ci_id as u8;
+          }
+          TableConsKind::Check(check) => {
+            let (id, cp) = self.allocate_page::<CheckPage>();
+            ci.check = id as u32;
+            cp.len = check.len() as u32;
+            let sz = ci.ty.size() as usize;
+            let mut off = 0;
+            for &c in check {
+              debug_assert!(off + sz <= MAX_CHECK_BYTES);
+              fill_ptr(cp.data.as_mut_ptr().add(off), ci.ty, c).unchecked_unwrap();
+              off += sz;
+            }
           }
         }
       }
@@ -150,17 +177,10 @@ impl Db {
   pub fn drop_table(&mut self, name: &str) -> Result<()> {
     unsafe {
       let dp = self.get_page::<DbPage>(0);
-      let idx = self.get_ti(name)?.p().offset_from(dp.tables.as_ptr()) as usize;
-      for ti in dp.tables() {
-        let tp = self.get_page::<TablePage>(ti.meta as usize);
-        for ci in tp.cols() {
-          if ci.foreign_table == idx as u8 {
-            return Err(DropTableWithForeignLink(name.into()));
-          }
-        }
-      }
-      let meta = dp.tables.get_unchecked(idx).meta;
-      dp.tables.get_unchecked_mut(idx).p().swap(dp.tables.get_unchecked_mut(dp.table_num as usize - 1));
+      let id = self.get_ti(name)?.0;
+      if self.has_foreign_link_to(id) { return Err(DropTableWithForeignLink(name.into())); }
+      let meta = dp.tables.get_unchecked(id).meta;
+      dp.tables.get_unchecked_mut(id).p().swap(dp.tables.get_unchecked_mut(dp.table_num as usize - 1));
       dp.table_num -= 1;
       let tp = self.get_page::<TablePage>(meta as usize);
       tp.cols_mut().iter_mut().filter(|ci| ci.index != !0).for_each(|ci| self.drop_index_impl(ci));
@@ -175,15 +195,26 @@ impl Db {
       Ok(())
     }
   }
+
+  // `id` is index in DbPage::tables
+  pub unsafe fn has_foreign_link_to(&mut self, id: usize) -> bool {
+    let dp = self.get_page::<DbPage>(0);
+    for ti in dp.tables() {
+      let tp = self.get_page::<TablePage>(ti.meta as usize);
+      for ci in tp.cols() {
+        if ci.foreign_table == id as u8 { return true; }
+      }
+    }
+    false
+  }
 }
 
 impl Db {
   pub fn create_index(&mut self, table: &str, col: &str) -> Result<()> {
     unsafe {
-      let tp = self.get_ti(table)?.meta as usize;
-      let tp = self.get_page::<TablePage>(tp);
-      if self.record_iter(tp).count() != 0 { return Err(CreateIndexOnNonEmpty(table.into())); }
-      let ci = tp.get_ci(col)?;
+      let (tp_id, tp) = self.get_tp(table)?;
+      if self.record_iter((tp_id, tp)).any(|_| true) { return Err(CreateIndexOnNonEmpty(table.into())); }
+      let ci = tp.get_ci(col)?.1;
       if ci.index != !0 { return Err(DupIndex(col.into())); }
       self.create_index_impl(ci);
       Ok(())
@@ -198,7 +229,7 @@ impl Db {
 
   pub fn drop_index(&mut self, table: &str, col: &str) -> Result<()> {
     unsafe {
-      let ci = self.get_ci(table, col)?;
+      let ci = self.get_tp(table)?.1.get_ci(col)?.1;
       if ci.index == !0 { return Err(NoSuchIndex(col.into())); }
       if ci.flags.contains(ColFlags::UNIQUE) { return Err(DropIndexOnUnique(col.into())); }
       self.drop_index_impl(ci);
@@ -233,7 +264,7 @@ impl Db {
   // the return P is neither initialized nor zeroed, just keeping the original bytes
   // allocation may not always be successful(when 64G is used up), but in most cases this error is not recoverable, so let it crash
   #[inline(always)]
-  pub unsafe fn allocate_page<'a, P>(&mut self) -> (usize, &'a mut P) {
+  pub unsafe fn allocate_page<'a, P>(&mut self) -> WithId<&'a mut P> {
     let dp = self.get_page::<DbPage>(0);
     let free = if dp.first_free != !0 {
       let free = dp.first_free as usize;
@@ -256,36 +287,28 @@ impl Db {
   }
 
   // unsafe because return value's lifetime is arbitrary
+  // return `id` is index in DbPage::tables
   #[inline(always)]
-  pub unsafe fn get_ti<'a>(&mut self, table: &str) -> Result<&'a mut TableInfo> {
+  pub unsafe fn get_ti<'a>(&mut self, table: &str) -> Result<WithId<&'a mut TableInfo>> {
     let dp = self.get_page::<DbPage>(0);
     match dp.pr().names().enumerate().find(|n| n.1 == table) {
-      Some((idx, _)) => Ok(dp.tables.get_unchecked_mut(idx)),
+      Some((idx, _)) => Ok((idx, dp.tables.get_unchecked_mut(idx))),
       None => Err(NoSuchTable(table.into())),
     }
   }
 
+  // return `id` is page id
   #[inline(always)]
-  pub unsafe fn get_tp<'a>(&mut self, table: &str) -> Result<&'a mut TablePage> {
-    self.get_ti(table).map(|ti| self.get_page::<TablePage>(ti.meta as usize))
+  pub unsafe fn get_tp<'a>(&mut self, table: &str) -> Result<WithId<&'a mut TablePage>> {
+    let tp_id = self.get_ti(table)?.1.meta as usize;
+    Ok((tp_id, self.get_page::<TablePage>(tp_id)))
   }
 
-  #[inline(always)]
-  pub unsafe fn id_of(&self, tp: &TablePage) -> usize {
-    (tp as *const TablePage).offset_from(self.mmap.as_ptr() as *const TablePage) as usize
-  }
-
-  #[inline(always)]
-  pub unsafe fn get_ci<'a>(&mut self, table: &str, col: &str) -> Result<&'a mut ColInfo> {
-    let meta = self.get_ti(table)?.meta as usize;
-    self.get_page::<TablePage>(meta).get_ci(col)
-  }
-
-  pub unsafe fn allocate_data_slot(&mut self, tp: &mut TablePage) -> Rid {
-    let table_page = self.id_of(tp) as u32;
+  pub unsafe fn allocate_data_slot(&mut self, tp_id: usize) -> Rid {
+    let tp = self.get_page::<TablePage>(tp_id);
     if tp.first_free == !0 {
       let (id, dp) = self.allocate_page::<DataPage>();
-      dp.init(tp.prev, table_page); // push back
+      dp.init(tp.prev, tp_id as u32); // push back
       tp.first_free = id as u32;
     }
     let free_page = tp.first_free;
