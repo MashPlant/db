@@ -1,4 +1,5 @@
 use driver::Eval;
+use crate::exec_all;
 
 const CREATE: &[u8] = include_bytes!("../sql/create.sql");
 const DROP: &[u8] = include_bytes!("../sql/drop.sql");
@@ -7,18 +8,6 @@ const BOOK: &[u8] = include_bytes!("../sql/book.sql");
 const WEBSITE: &[u8] = include_bytes!("../sql/website.sql");
 const PRICE: &[u8] = include_bytes!("../sql/price.sql");
 const ORDERS: &[u8] = include_bytes!("../sql/orders.sql");
-
-
-fn exec_all(code: &[u8], e: Option<Eval>) -> Eval {
-  use syntax::*;
-  let mut e = e.unwrap_or_else(Eval::new);
-  for s in &Parser.parse(&mut Lexer::new(code)).unwrap() {
-    let res = e.exec(s);
-    res.unwrap();
-  }
-  e
-}
-
 
 #[test]
 fn test() {
@@ -84,5 +73,5 @@ fn test() {
   let e = exec_all(PRICE, Some(e));
   let _ = exec_all(ORDERS, Some(e));
 
-  exec_all(DROP, None);
+//  exec_all(DROP, None);
 }

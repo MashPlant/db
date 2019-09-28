@@ -1,4 +1,4 @@
-use std::{fs::{File, OpenOptions}, path::Path, mem};
+use std::{fs::{File, OpenOptions}, path::Path};
 use memmap::{MmapOptions, MmapMut};
 
 use physics::*;
@@ -309,31 +309,23 @@ impl Db {
     if tp.first_free == !0 {
       let (id, dp) = self.allocate_page::<DataPage>();
       dp.init(tp.prev, tp_id as u32); // push back
+      self.get_page::<(u32, u32)>(tp.prev as usize).1 = id as u32; // tp.prev.next, note that tp.prev may be a table/data page
+      tp.prev = id as u32;
       tp.first_free = id as u32;
     }
     let free_page = tp.first_free;
     let dp = self.get_page::<DataPage>(free_page as usize);
     debug_assert!(dp.count < tp.cap);
-    debug_assert!(((tp.cap + 31) / 32) as usize <= MAX_SLOT_BS);
-    let mut slot = mem::MaybeUninit::<u32>::uninit();
-    'out: for i in 0..((tp.cap + 31) / 32) as usize {
-      let x = dp.used.get_unchecked_mut(i);
-      if *x != !0 {
-        for b in 0..32 {
-          if ((*x >> b) & 1) == 0 {
-            *x |= 1 << b;
-            slot.as_mut_ptr().write(i as u32 * 32 + b);
-            break 'out;
-          }
-        }
-        debug_unreachable!();
-      }
-    }
+    debug_assert!(tp.cap as usize <= MAX_SLOT_BS * 32);
+    let slot = (0..tp.cap as usize).filter_map(|i| {
+      let word = dp.used.get_unchecked_mut(i / 32);
+      if (*word >> (i % 32)) == 0 { (*word |= 1 << (i % 32), Some(i)).1 } else { None }
+    }).next().unchecked_unwrap() as u32;
     dp.count += 1;
     if dp.count == tp.cap { // full, move to next
       tp.first_free = dp.next_free;
     }
-    Rid::new(free_page, slot.assume_init())
+    Rid::new(free_page, slot)
   }
 
   pub unsafe fn deallocate_data_slot(&mut self, tp: &mut TablePage, rid: Rid) {

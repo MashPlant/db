@@ -112,12 +112,12 @@ impl<'p> Parser {
   fn stmt_show_tables(_: Token, _: Token) -> Stmt<'p> { Stmt::ShowTables }
   #[rule(Stmt -> Desc Id)]
   fn stmt_show_table(_: Token, t: Token) -> Stmt<'p> { Stmt::ShowTable(t.str()) }
-  #[rule(Stmt -> Select Mul From IdList WhereList)]
-  fn stmt_select0(_: Token, _: Token, _: Token, tables: Vec<&'p str>, where_: Vec<Expr<'p>>) -> Stmt<'p> {
+  #[rule(Stmt -> Select Mul From IdList Where WhereList)]
+  fn stmt_select0(_: Token, _: Token, _: Token, tables: Vec<&'p str>, _: Token, where_: Vec<Expr<'p>>) -> Stmt<'p> {
     Stmt::Select(Select { ops: None, tables, where_ })
   }
-  #[rule(Stmt -> Select AggList From IdList WhereList)]
-  fn stmt_select1(_: Token, ops: Vec<Agg<'p>>, _: Token, tables: Vec<&'p str>, where_: Vec<Expr<'p>>) -> Stmt<'p> {
+  #[rule(Stmt -> Select AggList From IdList Where WhereList)]
+  fn stmt_select1(_: Token, ops: Vec<Agg<'p>>, _: Token, tables: Vec<&'p str>, _: Token, where_: Vec<Expr<'p>>) -> Stmt<'p> {
     Stmt::Select(Select { ops: Some(ops), tables, where_ })
   }
   #[rule(Stmt -> Insert Into Id Values LitListList)]
@@ -217,8 +217,8 @@ impl<'p> Parser {
 
   #[rule(WhereList -> WhereList And Expr)]
   fn where1(mut wl: Vec<Expr<'p>>, _: Token, e: Expr<'p>) -> Vec<Expr<'p>> { (wl.push(e), wl).1 }
-  #[rule(WhereList ->)]
-  fn where0() -> Vec<Expr<'p>> { vec![] }
+  #[rule(WhereList -> Expr)]
+  fn where0(e: Expr<'p>) -> Vec<Expr<'p>> { vec![e] }
 
   #[rule(Expr -> ColRef Lt Atom)]
   fn expr_lt(l: ColRef<'p>, _: Token, r: Atom<'p>) -> Expr<'p> { Expr::Cmp(CmpOp::Lt, l, r) }
@@ -232,8 +232,10 @@ impl<'p> Parser {
   fn expr_eq(l: ColRef<'p>, _: Token, r: Atom<'p>) -> Expr<'p> { Expr::Cmp(CmpOp::Eq, l, r) }
   #[rule(Expr -> ColRef Is Null)]
   fn expr_is_null(c: ColRef<'p>, _: Token, _: Token) -> Expr<'p> { Expr::Null(c, true) }
-  #[rule(Expr -> ColRef Is Not Null)]
-  fn expr_is_not_null(c: ColRef<'p>, _: Token, _: Token, _: Token) -> Expr<'p> { Expr::Null(c, false) }
+  #[rule(Expr -> ColRef Is NotNull)]
+  fn expr_is_not_null(c: ColRef<'p>, _: Token, _: Token) -> Expr<'p> { Expr::Null(c, false) }
+  #[rule(Expr -> ColRef Like StrLit)]
+  fn expr_like(c: ColRef<'p>, _: Token, s: Token) -> Expr<'p> { Expr::Like(c, s.str()) }
 
   #[rule(Atom -> ColRef)]
   fn atom_col_ref(c: ColRef<'p>) -> Atom<'p> { Atom::ColRef(c) }

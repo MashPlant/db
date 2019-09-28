@@ -1,4 +1,5 @@
 use common::*;
+use std::fmt;
 
 #[derive(Debug)]
 pub enum Stmt<'a> {
@@ -47,7 +48,6 @@ pub struct Delete<'a> {
   pub where_: Vec<Expr<'a>>,
 }
 
-#[derive(Debug)]
 pub struct ColRef<'a> {
   pub table: Option<&'a str>,
   pub col: &'a str,
@@ -91,7 +91,6 @@ pub enum TableConsKind<'a> {
   Check(Vec<Lit<'a>>),
 }
 
-#[derive(Debug)]
 pub enum Expr<'a> {
   Cmp(CmpOp, ColRef<'a>, Atom<'a>),
   // true for `is null`, false for `is not null`
@@ -114,8 +113,31 @@ impl<'a> Expr<'a> {
 #[derive(Debug, Copy, Clone)]
 pub enum CmpOp { Lt, Le, Ge, Gt, Eq, Ne }
 
+impl CmpOp {
+  pub fn str(self) -> &'static str {
+    use CmpOp::*;
+    match self { Lt => "<", Le => "<=", Ge => ">=", Gt => ">", Eq => "==", Ne => "!=" }
+  }
+}
+
 #[derive(Debug)]
 pub enum Atom<'a> {
   ColRef(ColRef<'a>),
   Lit(Lit<'a>),
+}
+
+impl fmt::Debug for ColRef<'_> {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    if let Some(table) = self.table { write!(f, "{}.{}", table, self.col) } else { write!(f, "{}", self.col) }
+  }
+}
+
+impl fmt::Debug for Expr<'_> {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      Expr::Cmp(op, l, r) => write!(f, "{:?} {} {:?}", l, op.str(), r),
+      Expr::Null(c, null) => write!(f, "{:?} is {}null", c, if *null { "" } else { "not " }),
+      Expr::Like(c, s) => write!(f, "{:?} like '{}'", c, s),
+    }
+  }
 }

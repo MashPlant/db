@@ -1,5 +1,7 @@
 use std::fmt;
 use chrono::NaiveDate;
+use unchecked_unwrap::UncheckedUnwrap;
+use csv::Writer;
 
 use common::{*, BareTy::*, Error::*};
 use syntax::ast::*;
@@ -7,7 +9,6 @@ use physics::*;
 use db::Db;
 use crate::predicate::{and, one_predicate, cross_predicate};
 use crate::filter::filter;
-use unchecked_unwrap::UncheckedUnwrap;
 
 pub struct SelectResult {
   // tbl[i] correspond to a table
@@ -19,29 +20,22 @@ pub struct SelectResult {
 impl fmt::Display for SelectResult {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     unsafe {
-      for tbl in &self.tbl {
-        for &col in tbl {
-          write!(f, "{}, ", col.name())?;
-        }
-      }
-      writeln!(f)?;
+      let mut wt = Writer::from_writer(vec![]);
+      wt.write_record(self.tbl.iter().flat_map(|tbl| tbl.iter().map(|col| col.name()))).unwrap();
       for data in &self.data {
         debug_assert_eq!(data.len(), self.tbl.len());
-        for (&data, tbl) in data.iter().zip(self.tbl.iter()) {
-          for &col in tbl {
-            let ptr = data.add(col.off as usize);
-            match col.ty.ty {
-              Int => write!(f, "{}, ", *(ptr as *const i32)),
-              Bool => write!(f, "{}, ", *(ptr as *const bool)),
-              Float => write!(f, "{}, ", *(ptr as *const f32)),
-              Char | VarChar => write!(f, "'{}', ", str_from_parts(ptr.add(1), *ptr as usize)),
-              Date => write!(f, "{}, ", *(ptr as *const NaiveDate)),
-            }?;
+        wt.write_record(data.iter().zip(self.tbl.iter()).flat_map(|(data, tbl)| tbl.iter().map(move |col| {
+          let ptr = data.add(col.off as usize);
+          match col.ty.ty {
+            Int => (*(ptr as *const i32)).to_string(),
+            Bool => (*(ptr as *const bool)).to_string(),
+            Float => (*(ptr as *const f32)).to_string(),
+            Char | VarChar => str_from_parts(ptr.add(1), *ptr as usize).to_owned(),
+            Date => (*(ptr as *const NaiveDate)).to_string(),
           }
-        }
-        writeln!(f)?;
+        }))).unwrap();
       }
-      Ok(())
+      write!(f, "{}", String::from_utf8(wt.into_inner().unwrap()).unwrap())
     }
   }
 }

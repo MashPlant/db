@@ -4,13 +4,12 @@ use common::{*, Error::*};
 use syntax::ast::*;
 use db::{Db, show::show_one_db};
 
+#[derive(Default)]
 pub struct Eval {
   pub db: Option<Db>
 }
 
 impl Eval {
-  pub fn new() -> Eval { Eval { db: None } }
-
   pub fn exec(&mut self, sql: &Stmt) -> Result<Cow<str>> {
     use Stmt::*;
     match sql {

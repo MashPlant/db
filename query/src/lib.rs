@@ -12,7 +12,7 @@ pub use crate::{insert::*, delete::*, select::*, update::*};
 // null bitset is in the header part of a data slot
 #[inline(always)]
 pub(crate) unsafe fn is_null(p: *const u8, idx: usize) -> bool {
-  ((*(p as *const u32).add(idx / 32) >> (idx as u32 % 32)) & 1) != 0
+  ((*(p as *const u32).add(idx / 32) >> (idx % 32)) & 1) != 0
 }
 
 #[macro_use]
