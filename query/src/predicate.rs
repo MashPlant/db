@@ -14,6 +14,9 @@ macro_rules! handle_op {
   };
 }
 
+// the pointer from IndexPage cannot be passed to predicate! It is just the data ptr, while all these predicate accept
+// the pointer to the start address of the whole data slot
+
 // assume both lhs and rhs belongs to tp's table, so ColRef::table is not checked
 pub unsafe fn one_predicate(e: &Expr, tp: &TablePage) -> Result<Box<dyn Fn(*const u8) -> bool>> {
   let (l_id, l) = tp.pr().get_ci(e.lhs_col().col)?;

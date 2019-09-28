@@ -2,7 +2,7 @@ use std::{borrow::Cow, fs};
 
 use common::{*, Error::*};
 use syntax::ast::*;
-use db::{Db, show::show_one_db};
+use db::{Db, show::show_db};
 
 #[derive(Default)]
 pub struct Eval {
@@ -10,6 +10,28 @@ pub struct Eval {
 }
 
 impl Eval {
+  pub fn exec_all(&mut self, code: &str,
+                  input_handler: impl Fn(&Stmt), result_handler: impl Fn(&str), err_handler: impl Fn(Error)) {
+    match syntax::work(code) {
+      Ok(program) => for s in &program {
+        input_handler(s);
+        match self.exec(s) { Ok(res) => result_handler(&res), Err(err) => err_handler(err), }
+      }
+      Err(err) => err_handler(err)
+    }
+  }
+
+  pub fn exec_all_repl(&mut self, code: &str) {
+    self.exec_all(code, |x| println!(">> {:?}", x), |x| println!("{}", x), |x| eprintln!("{:?}", x))
+  }
+
+  pub fn exec_all_check(&mut self, code: &str) {
+    self.exec_all(code, |_| {}, |_| {}, |x| {
+      eprintln!("{:?}", x);
+      std::process::exit(1);
+    })
+  }
+
   pub fn exec(&mut self, sql: &Stmt) -> Result<Cow<str>> {
     use Stmt::*;
     match sql {
@@ -25,13 +47,13 @@ impl Eval {
       }
       &ShowDb(path) => {
         let mut s = String::new();
-        show_one_db(path, &mut s)?;
+        show_db(path, &mut s)?;
         Ok(s.into())
       }
       ShowDbs => {
         let mut s = String::new();
         for e in fs::read_dir(".")? {
-          let _ = show_one_db(e?.path(), &mut s);
+          let _ = show_db(e?.path(), &mut s);
         }
         Ok(s.into())
       }
@@ -44,7 +66,7 @@ impl Eval {
       &ShowTable(name) => self.db()?.show_table(name).map(|s| s.into()),
       ShowTables => Ok(self.db()?.show_tables().into()),
       &CreateIndex(table, col) => {
-        self.db()?.create_index(table, col)?;
+        index::create(self.db()?, table, col)?;
         Ok("".into())
       }
       &DropIndex(table, col) => {

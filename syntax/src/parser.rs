@@ -1,15 +1,28 @@
 use parser_macros::lalr1;
-use common::{ColTy, BareTy::{*, self}, Lit};
+use common::{BareTy::{*, self}, ParserError::{*, self}, Error, Lit, ColTy};
 use crate::ast::*;
 
-pub struct Parser;
+#[derive(Default)]
+pub struct Parser(Vec<ParserError>);
 
 impl<'p> Token<'p> {
   fn str_trim(&self) -> &'p str { std::str::from_utf8(&self.piece[1..self.piece.len() - 1]).unwrap() }
   fn str(&self) -> &'p str { std::str::from_utf8(self.piece).unwrap() }
-  fn i32(&self) -> i32 { self.str().parse().unwrap() }
-  fn u8(&self) -> u8 { self.str().parse().unwrap() }
-  fn f32(&self) -> f32 { self.str().parse().unwrap() }
+}
+
+pub fn work(code: &str) -> std::result::Result<Vec<Stmt>, Error> {
+  let mut p = Parser(vec![]);
+  match p.parse(&mut Lexer::new(code.as_bytes())) {
+    Ok(ss) if p.0.is_empty() => Ok(ss),
+    Err(t) => {
+      match t.ty {
+        TokenKind::_Err => p.0.push(UnrecognizedChar(t.piece[0] as char)),
+        _ => p.0.push(SyntaxError),
+      }
+      Err(Error::ParserErrors(p.0.into()))
+    }
+    _ => Err(Error::ParserErrors(p.0.into())),
+  }
 }
 
 #[lalr1(Program)]
@@ -58,13 +71,12 @@ priority = []
 '(t|T)(r|R)(u|U)(e|E)' = 'True'
 '(f|F)(a|A)(l|L)(s|S)(e|E)' = 'False'
 '(a|A)(n|N)(d|D)' = 'And'
-'(n|N)(o|O)(t|T)' = 'Not'
 '<' = 'Lt'
 '<=' = 'Le'
 '>=' = 'Ge'
 '>' = 'Gt'
 '=' = 'Eq'
-'<>' = 'Ne'
+'(<>)(!=)' = 'Ne'
 '\*' = 'Mul'
 '\.' = 'Dot'
 ',' = 'Comma'
@@ -230,6 +242,8 @@ impl<'p> Parser {
   fn expr_gt(l: ColRef<'p>, _: Token, r: Atom<'p>) -> Expr<'p> { Expr::Cmp(CmpOp::Gt, l, r) }
   #[rule(Expr -> ColRef Eq Atom)]
   fn expr_eq(l: ColRef<'p>, _: Token, r: Atom<'p>) -> Expr<'p> { Expr::Cmp(CmpOp::Eq, l, r) }
+  #[rule(Expr -> ColRef Ne Atom)]
+  fn expr_ne(l: ColRef<'p>, _: Token, r: Atom<'p>) -> Expr<'p> { Expr::Cmp(CmpOp::Ne, l, r) }
   #[rule(Expr -> ColRef Is Null)]
   fn expr_is_null(c: ColRef<'p>, _: Token, _: Token) -> Expr<'p> { Expr::Null(c, true) }
   #[rule(Expr -> ColRef Is NotNull)]
@@ -245,13 +259,19 @@ impl<'p> Parser {
   #[rule(Lit -> Null)]
   fn lit_null(_: Token) -> Lit<'p> { Lit::Null }
   #[rule(Lit -> IntLit)]
-  fn lit_int(t: Token) -> Lit<'p> { Lit::Int(t.i32()) }
+  fn lit_int(&mut self, t: Token) -> Lit<'p> {
+    let s = t.str();
+    Lit::Int(s.parse().unwrap_or_else(|_| (self.0.push(InvalidInt(s.into())), 0).1))
+  }
   #[rule(Lit -> True)]
   fn lit_true(_: Token) -> Lit<'p> { Lit::Bool(true) }
   #[rule(Lit -> False)]
   fn lit_false(_: Token) -> Lit<'p> { Lit::Bool(false) }
   #[rule(Lit -> FloatLit)]
-  fn lit_float(t: Token) -> Lit<'p> { Lit::Float(t.f32()) }
+  fn lit_float(&mut self, t: Token) -> Lit<'p> {
+    let s = t.str();
+    Lit::Float(s.parse().unwrap_or_else(|_| (self.0.push(InvalidFloat(s.into())), 0.0).1))
+  }
   #[rule(Lit -> StrLit)]
   fn lit_str(t: Token) -> Lit<'p> { Lit::Str(t.str_trim()) }
 
@@ -269,7 +289,10 @@ impl<'p> Parser {
   fn bare_ty_date(_: Token) -> BareTy { Date }
 
   #[rule(ColTy -> BareTy LParen IntLit RParen)]
-  fn col_ty(ty: BareTy, _: Token, t: Token, _: Token) -> ColTy { ColTy { size: t.u8(), ty } }
+  fn col_ty(&mut self, ty: BareTy, _: Token, t: Token, _: Token) -> ColTy {
+    let s = t.str();
+    ColTy { size: s.parse().unwrap_or_else(|_| (self.0.push(TypeSizeTooLarge(s.into())), 0).1), ty }
+  }
   #[rule(ColTy -> Int)]
   fn col_ty_int(_: Token) -> ColTy { ColTy { size: 0, ty: Int } }
   #[rule(ColTy -> Bool)]

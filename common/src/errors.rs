@@ -1,9 +1,17 @@
-use std::{fmt, io::Error as IOError, error};
-
 use crate::{MAGIC_LEN, ColTy, BareTy, LitTy, OwnedLit};
 
 #[derive(Debug)]
+pub enum ParserError {
+  SyntaxError,
+  UnrecognizedChar(char),
+  TypeSizeTooLarge(Box<str>),
+  InvalidInt(Box<str>),
+  InvalidFloat(Box<str>),
+}
+
+#[derive(Debug)]
 pub enum Error {
+  ParserErrors(Box<[ParserError]>),
   InvalidSize(usize),
   InvalidMagic([u8; MAGIC_LEN]),
   NoDbInUse,
@@ -16,7 +24,6 @@ pub enum Error {
   DupCol(Box<str>),
   ForeignKeyOnNonUnique(Box<str>),
   DupIndex(Box<str>),
-  CreateIndexOnNonEmpty(Box<str>),
   DropIndexOnUnique(Box<str>),
   NoSuchTable(Box<str>),
   NoSuchCol(Box<str>),
@@ -49,19 +56,11 @@ pub enum Error {
   DupCheck(Box<str>),
   CheckNull(Box<str>),
   CheckTooLong(Box<str>, usize),
-  IO(IOError),
+  IO(std::io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-impl From<IOError> for Error {
-  fn from(e: IOError) -> Self { Error::IO(e) }
-}
-
-impl error::Error for Error {}
-
-impl fmt::Display for Error {
-  fn fmt(&self, f: &mut fmt::Formatter) -> std::result::Result<(), fmt::Error> {
-    write!(f, "{:?}", self)
-  }
+impl From<std::io::Error> for Error {
+  fn from(e: std::io::Error) -> Self { Error::IO(e) }
 }

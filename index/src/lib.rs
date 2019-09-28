@@ -10,6 +10,9 @@ use crate::cmp::*;
 
 pub mod cmp;
 pub mod iter;
+pub mod create;
+
+pub use create::create;
 
 // using both lifetime parameter and const parameter will cause my rustc(1.38.0-nightly) to ICE
 // so just use pointer here
@@ -35,7 +38,7 @@ impl<const T: BareTy> Index<{ T }> {
   pub unsafe fn insert(&mut self, data: *const u8, rid: Rid) {
     let data_rid = self.make_data_rid(data, rid);
     if let Some((overflow, split_page)) = self.do_insert(self.root as usize, data_rid.ptr) {
-      let (new_id, new_ip) = self.db().allocate_page::<IndexPage>();
+      let (new_id, new_ip) = self.db().alloc_page::<IndexPage>();
       let old = self.db().get_page::<IndexPage>(self.root as usize);
       (new_ip.next = !0, new_ip.count = 2, new_ip.leaf = false, new_ip.rid_off = old.rid_off);
       new_ip.cap = MAX_INDEX_BYTES as u16 / new_ip.slot_size();
@@ -80,7 +83,7 @@ impl<const T: BareTy> Index<{ T }> {
       }
     }
     if ip.count == ip.cap {
-      let (sp_id, sp_ip) = self.db().allocate_page::<IndexPage>();
+      let (sp_id, sp_ip) = self.db().alloc_page::<IndexPage>();
       (sp_ip.next = ip.next, ip.next = sp_id as u32);
       // split ceiling half to new page, which keeps the mid key
       (sp_ip.count = ip.count - ip.count / 2, ip.count /= 2);
@@ -117,7 +120,7 @@ impl<const T: BareTy> Index<{ T }> {
       if need_merge {
         if ip.count == 1 {
           debug_assert!(page == self.root as usize); // only root can have so few slots
-          self.db().deallocate_page(page);
+          self.db().dealloc_page(page);
           self.make_root(at_ch!(0));
         } else {
           let l = if pos + 1 < ip.count as usize { pos } else { pos - 1 };
@@ -135,7 +138,7 @@ impl<const T: BareTy> Index<{ T }> {
               .copy_from_nonoverlapping(rp.data.as_ptr(), rp.count as usize * slot_size);
             lp.count += rp.count;
             remove!(l + 1); // r is overwritten
-            self.db().deallocate_page(rid);
+            self.db().dealloc_page(rid);
           } else { // do transfer, make each of them have same number of keys
             let tot = lp.count + rp.count;
             if lp.count < tot / 2 {
@@ -175,5 +178,16 @@ impl<const T: BareTy> Index<{ T }> {
     debug_assert!(page == self.root as usize || ip.cap / 2 <= ip.count);
     debug_assert!(ip.leaf || ip.next == !0);
     debug_assert_eq!(ip.rid_off, self.rid_off);
+  }
+}
+
+#[macro_use]
+pub(crate) mod macros {
+  // handle all kinds of Index with regard to different types
+  #[macro_export]
+  macro_rules! handle_all {
+    ($ty: expr, $handle: ident) => {
+      match $ty { Int => $handle!(Int), Bool => $handle!(Bool), Float => $handle!(Float), Char => $handle!(Char), VarChar => $handle!(VarChar), Date => $handle!(Date) }
+    };
   }
 }

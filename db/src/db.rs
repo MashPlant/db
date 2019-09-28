@@ -117,7 +117,7 @@ impl Db {
       // now no error can occur, can write to db safely
 
       // handle each col def
-      let (id, tp) = self.allocate_page::<TablePage>();
+      let (id, tp) = self.alloc_page::<TablePage>();
       let mut size = (c.cols.len() as u16 + 31) / 32 * 4; // null bitset
       for (i, c) in c.cols.iter().enumerate() {
         if c.ty.align4() { size = (size + 3) & !3; }
@@ -145,7 +145,7 @@ impl Db {
             ci.foreign_col = f_ci_id as u8;
           }
           TableConsKind::Check(check) => {
-            let (id, cp) = self.allocate_page::<CheckPage>();
+            let (id, cp) = self.alloc_page::<CheckPage>();
             ci.check = id as u32;
             cp.len = check.len() as u32;
             let sz = ci.ty.size() as usize;
@@ -168,7 +168,7 @@ impl Db {
 
       tp.cols_mut().iter_mut()
         .filter(|ci| ci.flags.contains(ColFlags::UNIQUE))
-        .for_each(|ci| self.create_index_impl(ci));
+        .for_each(|ci| self.alloc_index(ci));
       Ok(())
     }
   }
@@ -187,7 +187,7 @@ impl Db {
       loop {
         // both TablePage and DataPage use [1] as next, [0] as prev
         let nxt = self.get_page::<(u32, u32)>(cur as usize).1;
-        self.deallocate_page(cur as usize);
+        self.dealloc_page(cur as usize);
         cur = nxt;
         if cur == meta { break; }
       }
@@ -209,19 +209,9 @@ impl Db {
 }
 
 impl Db {
-  pub fn create_index(&mut self, table: &str, col: &str) -> Result<()> {
-    unsafe {
-      let (tp_id, tp) = self.get_tp(table)?;
-      if self.record_iter((tp_id, tp)).any(|_| true) { return Err(CreateIndexOnNonEmpty(table.into())); }
-      let ci = tp.get_ci(col)?.1;
-      if ci.index != !0 { return Err(DupIndex(col.into())); }
-      self.create_index_impl(ci);
-      Ok(())
-    }
-  }
-
-  unsafe fn create_index_impl(&mut self, ci: &mut ColInfo) {
-    let (id, ip) = self.allocate_page::<IndexPage>();
+  // this is pub for `index` crate's use
+  pub unsafe fn alloc_index(&mut self, ci: &mut ColInfo) {
+    let (id, ip) = self.alloc_page::<IndexPage>();
     ci.index = id as u32;
     ip.init(true, ci.ty.size()); // it is the root, but also a leaf
   }
@@ -246,7 +236,7 @@ impl Db {
           dfs(db, at_ch!(i) as usize);
         }
       }
-      db.deallocate_page(page);
+      db.dealloc_page(page);
     }
     dfs(self, ci.index as usize);
     ci.index = !0;
@@ -261,7 +251,7 @@ impl Db {
 
   // the return P is neither initialized nor zeroed, just keeping the original bytes
   // allocation may not always be successful(when 64G is used up), but in most cases this error is not recoverable, so let it crash
-  pub unsafe fn allocate_page<'a, P>(&mut self) -> WithId<&'a mut P> {
+  pub unsafe fn alloc_page<'a, P>(&mut self) -> WithId<&'a mut P> {
     let dp = self.get_page::<DbPage>(0);
     let free = if dp.first_free != !0 {
       let free = dp.first_free as usize;
@@ -275,7 +265,7 @@ impl Db {
     (free, self.get_page(free) as _)
   }
 
-  pub unsafe fn deallocate_page(&mut self, page: usize) {
+  pub unsafe fn dealloc_page(&mut self, page: usize) {
     let dp = self.get_page::<DbPage>(0);
     let first = self.get_page::<u32>(page);
     *first = dp.first_free;
@@ -301,7 +291,7 @@ impl Db {
   pub unsafe fn allocate_data_slot(&mut self, tp_id: usize) -> Rid {
     let tp = self.get_page::<TablePage>(tp_id);
     if tp.first_free == !0 {
-      let (id, dp) = self.allocate_page::<DataPage>();
+      let (id, dp) = self.alloc_page::<DataPage>();
       dp.init(tp.prev, tp_id as u32); // push back
       self.get_page::<(u32, u32)>(tp.prev as usize).1 = id as u32; // tp.prev.next, note that tp.prev may be a table/data page
       tp.prev = id as u32;
@@ -312,8 +302,7 @@ impl Db {
     debug_assert!(dp.count < tp.cap);
     debug_assert!(tp.cap as usize <= MAX_SLOT_BS * 32);
     let slot = (0..tp.cap as usize).filter_map(|i| {
-      let word = dp.used.get_unchecked_mut(i / 32);
-      if (*word >> (i % 32)) == 0 { (*word |= 1 << (i % 32), Some(i)).1 } else { None }
+      if bsget(dp.used.as_ptr(), i) { None } else { (bsset(dp.used.as_mut_ptr(), i), Some(i)).1 }
     }).next().unchecked_unwrap() as u32;
     dp.count += 1;
     if dp.count == tp.cap { // full, move to next
@@ -322,11 +311,11 @@ impl Db {
     Rid::new(free_page, slot)
   }
 
-  pub unsafe fn deallocate_data_slot(&mut self, tp: &mut TablePage, rid: Rid) {
+  pub unsafe fn dealloc_data_slot(&mut self, tp: &mut TablePage, rid: Rid) {
     let (page, slot) = (rid.page(), rid.slot());
     let dp = self.get_page::<DataPage>(page as usize);
-    debug_assert_eq!((*dp.used.get_unchecked(slot as usize / 32) >> (slot % 32)) & 1, 1);
-    *dp.used.get_unchecked_mut(slot as usize / 32) &= !(1 << (slot % 32));
+    debug_assert!(bsget(dp.used.as_ptr(), slot as usize));
+    bsdel(dp.used.as_mut_ptr(), slot as usize);
     if dp.count == tp.cap { // not in free list, add it
       dp.next_free = tp.first_free;
       tp.first_free = page;

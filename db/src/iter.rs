@@ -30,7 +30,7 @@ impl Iterator for RecordIter<'_> {
         let dp = self.db.get_page::<DataPage>(self.page as usize);
         let cap = self.db.get_page::<TablePage>(self.tp_id as usize).cap;
         for i in self.slot as usize..cap as usize {
-          if ((*dp.used.get_unchecked(i / 32) >> (i % 32)) & 1) != 0 {
+          if bsget(dp.used.as_ptr(), i) {
             self.slot = i as u16 + 1;
             let data = dp.data.as_mut_ptr().add(i * self.slot_size as usize);
             let rid = Rid::new(self.page, i as u32);

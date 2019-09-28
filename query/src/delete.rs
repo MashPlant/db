@@ -2,8 +2,8 @@ use common::{*, BareTy::*, Error::*};
 use syntax::ast::*;
 use physics::*;
 use db::Db;
-use index::Index;
-use crate::{handle_all, predicate::one_where, is_null, filter::filter};
+use index::{Index, handle_all};
+use crate::{predicate::one_where, is_null, filter::filter};
 
 pub fn delete(d: &Delete, db: &mut Db) -> Result<()> {
   unsafe {
@@ -28,7 +28,10 @@ pub fn delete(d: &Delete, db: &mut Db) -> Result<()> {
         handle_all!(ci.ty.ty, handle);
       }
     }
-    for &(_, rid) in &del { db.deallocate_data_slot(tp, rid); }
+    for &(_, rid) in &del {
+      tp.count -= 1;
+      db.dealloc_data_slot(tp, rid);
+    }
     Ok(())
   }
 }

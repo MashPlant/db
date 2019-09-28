@@ -5,8 +5,7 @@ use common::{*, BareTy::*};
 use syntax::ast::{*, CmpOp::*};
 use physics::*;
 use db::{Db, fill_ptr};
-use index::Index;
-use crate::handle_all;
+use index::{Index, handle_all};
 
 // return true for successfully filtered with index
 unsafe fn try_filter_with_index<'a, E: Borrow<Expr<'a>>>(where_: &[E], tp: WithId<&TablePage>, db: &mut Db,
@@ -30,36 +29,39 @@ unsafe fn try_filter_with_index<'a, E: Borrow<Expr<'a>>>(where_: &[E], tp: WithI
                 match op {
                   Lt => {
                     let (mut it, end) = (index.iter(), index.lower_bound(buf.ptr));
-                    while let Some((data, rid)) = it.next() {
-                      // these two pointers (data.as_ptr() and db.get_data_slot(tp, rid)) should have the same content
-                      // they just have different owner, former is from IndexPage, latter is from DataPage
-                      if pred(data.as_ptr()) { f(db.get_data_slot(tp, rid), rid); }
+                    while let Some((_, rid)) = it.next() {
+                      let ptr = db.get_data_slot(tp, rid);
+                      if pred(ptr) { f(ptr, rid); }
                       if it == end { break; }
                     }
                   },
                   Le => {
                     let (mut it, end) = (index.iter(), index.upper_bound(buf.ptr));
-                    while let Some((data, rid)) = it.next() {
-                      if pred(data.as_ptr()) { f(db.get_data_slot(tp, rid), rid); }
+                    while let Some((_, rid)) = it.next() {
+                      let ptr = db.get_data_slot(tp, rid);
+                      if pred(ptr) { f(ptr, rid); }
                       if it == end { break; }
                     }
                   },
                   Ge => {
                     let mut it = index.lower_bound(buf.ptr);
-                    while let Some((data, rid)) = it.next() {
-                      if pred(data.as_ptr()) { f(db.get_data_slot(tp, rid), rid); }
+                    while let Some((_, rid)) = it.next() {
+                      let ptr = db.get_data_slot(tp, rid);
+                      if pred(ptr) { f(ptr, rid); }
                     }
                   },
                   Gt => {
                     let mut it = index.upper_bound(buf.ptr);
-                    while let Some((data, rid)) = it.next(){
-                      if pred(data.as_ptr()) { f(db.get_data_slot(tp, rid), rid); }
+                    while let Some((_, rid)) = it.next(){
+                      let ptr = db.get_data_slot(tp, rid);
+                      if pred(ptr) { f(ptr, rid); }
                     }
                   },
                   Eq => {
                     let (mut it, end) = (index.lower_bound(buf.ptr), index.upper_bound(buf.ptr));
-                    while let Some((data, rid)) = it.next() {
-                      if pred(data.as_ptr()) { f(db.get_data_slot(tp, rid), rid); }
+                    while let Some((_, rid)) = it.next() {
+                      let ptr = db.get_data_slot(tp, rid);
+                      if pred(ptr) { f(ptr, rid); }
                       if it == end { break; }
                     }
                   },

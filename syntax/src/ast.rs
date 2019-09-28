@@ -118,7 +118,6 @@ impl CmpOp {
   }
 }
 
-#[derive(Debug)]
 pub enum Atom<'a> {
   ColRef(ColRef<'a>),
   Lit(Lit<'a>),
@@ -129,6 +128,13 @@ impl fmt::Debug for ColRef<'_> {
     if let Some(table) = self.table { write!(f, "{}.{}", table, self.col) } else { write!(f, "{}", self.col) }
   }
 }
+
+impl fmt::Debug for Atom<'_> {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self { Atom::ColRef(c) => write!(f, "{:?}", c), Atom::Lit(l) => write!(f, "{:?}", l) }
+  }
+}
+
 
 impl fmt::Debug for Expr<'_> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

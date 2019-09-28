@@ -1,24 +1,9 @@
 use driver::Eval;
 
-fn exec_all(code: &[u8], e: &mut Eval) {
-  use syntax::*;
-
-  for s in &Parser.parse(&mut Lexer::new(code)).unwrap() {
-//    println!(">> {:?}", s);
-    match e.exec(s) {
-      Ok(msg) => print!("{}", msg),
-      Err(err) => println!("Error: {}", err),
-    }
-  }
-}
-
 fn main() {
-  let ref mut e = Eval::default();
-
-//  exec_all(include_bytes!("../../tests/sql/create.sql"), e);
-//  exec_all(include_bytes!("../../tests/sql/customer.sql"), e);
-  exec_all(include_bytes!("../../tests/sql/test_select.sql"), e);
-
+//  exec_all(include_str!("../../tests/sql/create.sql"), e);
+//  exec_all(include_str!("../../tests/sql/customer.sql"), e);
+  Eval::default().exec_all_repl(include_str!("../../tests/sql/test_select.sql"));
 
 //  let file: &[u8] = include_bytes!("../../tests/sql/customer.sql");
 //  let sl = Parser.parse(&mut Lexer::new(file)).unwrap();

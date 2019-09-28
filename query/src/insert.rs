@@ -1,9 +1,9 @@
 use common::{*, BareTy::*, Error::*};
 use syntax::ast::*;
 use physics::*;
-use index::{Index, cmp::Cmp};
+use index::{Index, cmp::Cmp, handle_all};
 use db::{Db, fill_ptr};
-use crate::{is_null, handle_all};
+use crate::is_null;
 
 struct InsertCtx<'a> {
   tp_id: usize,
@@ -30,6 +30,7 @@ impl InsertCtx<'_> {
       ctx.fill_buf(buf.ptr, vals)?;
       ctx.insert_ck(buf.ptr, vals, db)?;
       // now it can't fail, do insert
+      ctx.tp.count += 1;
       let rid = db.allocate_data_slot(ctx.tp_id); // the `used` bit is set here, and `count` grows here
       let (page, slot) = (rid.page(), rid.slot());
       debug_assert!(slot < ctx.tp.cap as u32);
@@ -62,7 +63,7 @@ impl InsertCtx<'_> {
       if val.is_null() {
         // primary implies notnull, so inserting null to primary key will be rejected here
         if ci.flags.contains(ColFlags::NOTNULL) { return Err(PutNullOnNotNull); }
-        *(buf as *mut u32).add(idx / 32) |= 1 << ((idx % 32) as u32);
+        bsset(buf as *mut u32, idx);
       } else {
         fill_ptr(buf.add(ci.off as usize), ci.ty, val)?;
       }

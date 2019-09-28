@@ -1,10 +1,11 @@
+use std::fmt;
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BareTy { Int, Bool, Float, Char, VarChar, Date }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub struct ColTy {
   pub ty: BareTy,
   pub size: u8,
@@ -29,10 +30,9 @@ impl ColTy {
   }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub enum Lit<'a> { Null, Int(i32), Bool(bool), Float(f32), Str(&'a str) }
 
-#[derive(Debug)]
 pub enum OwnedLit { Null, Int(i32), Bool(bool), Float(f32), Str(Box<str>) }
 
 #[derive(Debug)]
@@ -50,4 +50,24 @@ impl Lit<'_> {
     use Lit::*;
     match *self { Null => OwnedLit::Null, Int(v) => OwnedLit::Int(v), Bool(v) => OwnedLit::Bool(v), Float(v) => OwnedLit::Float(v), Str(v) => OwnedLit::Str(v.into()), }
   }
+
+  pub fn from_owned(o: &OwnedLit) -> Lit {
+    use OwnedLit::*;
+    match *o { Null => Lit::Null, Int(v) => Lit::Int(v), Bool(v) => Lit::Bool(v), Float(v) => Lit::Float(v), Str(ref v) => Lit::Str(v), }
+  }
+}
+
+impl fmt::Debug for ColTy {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{:?}({})", self.ty, self.size) }
+}
+
+impl fmt::Debug for Lit<'_> {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    use Lit::*;
+    match self { Null => write!(f, "null"), Int(x) => write!(f, "{}", x), Bool(x) => write!(f, "{}", x), Float(x) => write!(f, "{}f", x), Str(x) => write!(f, "'{}'", x) }
+  }
+}
+
+impl fmt::Debug for OwnedLit {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{:?}", Lit::from_owned(self)) }
 }

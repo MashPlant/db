@@ -1,20 +1,20 @@
 use driver::Eval;
-use crate::exec_all;
 
-const CREATE: &[u8] = include_bytes!("../sql/create.sql");
-const DROP: &[u8] = include_bytes!("../sql/drop.sql");
-const CUSTOMER: &[u8] = include_bytes!("../sql/customer.sql");
-const BOOK: &[u8] = include_bytes!("../sql/book.sql");
-const WEBSITE: &[u8] = include_bytes!("../sql/website.sql");
-const PRICE: &[u8] = include_bytes!("../sql/price.sql");
-const ORDERS: &[u8] = include_bytes!("../sql/orders.sql");
+const CREATE: &str = include_str!("../sql/create.sql");
+const DROP: &str = include_str!("../sql/drop.sql");
+const CUSTOMER: &str = include_str!("../sql/customer.sql");
+const BOOK: &str = include_str!("../sql/book.sql");
+const WEBSITE: &str = include_str!("../sql/website.sql");
+const PRICE: &str = include_str!("../sql/price.sql");
+const ORDERS: &str = include_str!("../sql/orders.sql");
 
 #[test]
 fn test() {
   use physics::*;
   use common::{*, BareTy::*};
 
-  let mut e = exec_all(CREATE, None);
+  let mut e = Eval::default();
+  e.exec_all_check(CREATE);
   unsafe {
     let db = e.db.as_mut().unwrap();
     let dp = db.get_page::<DbPage>(0);
@@ -67,11 +67,11 @@ fn test() {
     }
   }
 
-  let e = exec_all(CUSTOMER, Some(e));
-  let e = exec_all(BOOK, Some(e));
-  let e = exec_all(WEBSITE, Some(e));
-  let e = exec_all(PRICE, Some(e));
-  let _ = exec_all(ORDERS, Some(e));
+  e.exec_all_check(CUSTOMER);
+  e.exec_all_check(BOOK);
+  e.exec_all_check(WEBSITE);
+  e.exec_all_check(PRICE);
+  e.exec_all_check(ORDERS);
 
 //  exec_all(DROP, None);
 }

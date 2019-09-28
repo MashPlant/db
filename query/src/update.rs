@@ -29,7 +29,7 @@ pub fn update(u: &Update, db: &mut Db) -> Result<()> {
         debug_assert_eq!(ci.index, !0);
         if val.is_null() {
           debug_assert!(!ci.flags.contains(ColFlags::NOTNULL));
-          *(data as *mut u32).add(ci_id / 32) |= 1 << ((ci_id % 32) as u32);
+          bsset(data as *mut u32, ci_id);
         } else {
           fill_ptr(data.add(ci.off as usize), ci.ty, val).unchecked_unwrap();
         }

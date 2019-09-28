@@ -57,3 +57,7 @@ impl Drop for Align4U8 {
     unsafe { dealloc(self.ptr, Layout::from_size_align_unchecked(self.size, 4)) }
   }
 }
+
+pub unsafe fn bsget(p: *const u32, idx: usize) -> bool { ((*p.add(idx / 32) >> (idx % 32)) & 1) != 0 }
+pub unsafe fn bsset(p: *mut u32, idx: usize) { *p.add(idx / 32) |= 1 << (idx % 32); }
+pub unsafe fn bsdel(p: *mut u32, idx: usize) { *p.add(idx / 32) &= !(1 << (idx % 32)); }
