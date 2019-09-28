@@ -30,7 +30,6 @@ pub struct ColInfo {
 }
 
 impl ColInfo {
-  #[inline(always)]
   pub unsafe fn init(&mut self, ty: ColTy, off: u16, name: &str, notnull: bool) {
     self.ty = ty;
     self.off = off;
@@ -71,7 +70,6 @@ pub const MAX_COL_NAME: u32 = 48;
 pub const MAX_COL: u32 = 127;
 
 impl TablePage {
-  #[inline(always)]
   pub fn init(&mut self, id: u32, size: u16, col_num: u8) {
     (self.prev = id, self.next = id);  // self-circle to represent empty linked list
     self.first_free = !0;
@@ -81,24 +79,20 @@ impl TablePage {
     self.col_num = col_num;
   }
 
-  #[inline(always)]
   pub unsafe fn names<'a>(&'a self) -> impl Iterator<Item=&'a str> + 'a {
     self.cols().iter().map(|c| c.name())
   }
 
-  #[inline(always)]
   pub unsafe fn cols<'a>(&self) -> &'a [ColInfo] {
     debug_assert!(self.col_num < MAX_COL as u8);
     std::slice::from_raw_parts(self.cols.as_ptr(), self.col_num as usize)
   }
 
-  #[inline(always)]
   pub unsafe fn cols_mut<'a>(&mut self) -> &'a mut [ColInfo] {
     debug_assert!(self.col_num < MAX_COL as u8);
     std::slice::from_raw_parts_mut(self.cols.as_mut_ptr(), self.col_num as usize)
   }
 
-  #[inline(always)]
   pub unsafe fn get_ci<'a>(&mut self, col: &str) -> Result<WithId<&'a mut ColInfo>> {
     match self.pr().names().enumerate().find(|n| n.1 == col) {
       Some((idx, _)) => Ok((idx, self.pr().cols.get_unchecked_mut(idx))),

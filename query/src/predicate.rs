@@ -135,7 +135,6 @@ pub unsafe fn one_where(where_: &[Expr], table: &str, tp: &TablePage) -> Result<
   Ok(and(preds))
 }
 
-#[inline(always)]
 pub fn and<T: Copy>(ps: Vec<Box<dyn Fn(T) -> bool>>) -> impl Fn(T) -> bool {
   move |t| ps.iter().all(|p| p(t))
 }

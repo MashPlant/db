@@ -155,5 +155,4 @@ impl InsertCtx<'_> {
   }
 }
 
-#[inline(always)]
 pub fn insert(i: &Insert, db: &mut Db) -> Result<()> { unsafe { InsertCtx::work(i, db) } }

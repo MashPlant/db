@@ -40,7 +40,6 @@ impl Db {
     }
   }
 
-  #[inline(always)]
   pub fn path(&self) -> &str { &self.path }
 }
 
@@ -255,7 +254,6 @@ impl Db {
 }
 
 impl Db {
-  #[inline(always)]
   pub unsafe fn get_page<'a, P>(&mut self, page: usize) -> &'a mut P {
     debug_assert!(page < self.pages);
     (self.mmap.get_unchecked_mut(page * PAGE_SIZE).p() as *mut P).r()
@@ -263,7 +261,6 @@ impl Db {
 
   // the return P is neither initialized nor zeroed, just keeping the original bytes
   // allocation may not always be successful(when 64G is used up), but in most cases this error is not recoverable, so let it crash
-  #[inline(always)]
   pub unsafe fn allocate_page<'a, P>(&mut self) -> WithId<&'a mut P> {
     let dp = self.get_page::<DbPage>(0);
     let free = if dp.first_free != !0 {
@@ -278,7 +275,6 @@ impl Db {
     (free, self.get_page(free) as _)
   }
 
-  #[inline(always)]
   pub unsafe fn deallocate_page(&mut self, page: usize) {
     let dp = self.get_page::<DbPage>(0);
     let first = self.get_page::<u32>(page);
@@ -288,7 +284,6 @@ impl Db {
 
   // unsafe because return value's lifetime is arbitrary
   // return `id` is index in DbPage::tables
-  #[inline(always)]
   pub unsafe fn get_ti<'a>(&mut self, table: &str) -> Result<WithId<&'a mut TableInfo>> {
     let dp = self.get_page::<DbPage>(0);
     match dp.pr().names().enumerate().find(|n| n.1 == table) {
@@ -298,7 +293,6 @@ impl Db {
   }
 
   // return `id` is page id
-  #[inline(always)]
   pub unsafe fn get_tp<'a>(&mut self, table: &str) -> Result<WithId<&'a mut TablePage>> {
     let tp_id = self.get_ti(table)?.1.meta as usize;
     Ok((tp_id, self.get_page::<TablePage>(tp_id)))
@@ -341,7 +335,6 @@ impl Db {
     dp.count -= 1;
   }
 
-  #[inline(always)]
   pub unsafe fn get_data_slot(&mut self, tp: &TablePage, rid: Rid) -> *mut u8 {
     let (page, slot) = (rid.page(), rid.slot());
     let off = (slot * tp.size as u32) as usize;

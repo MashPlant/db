@@ -11,7 +11,6 @@ pub struct DataPage {
 }
 
 impl DataPage {
-  #[inline(always)]
   pub fn init(&mut self, prev: u32, next: u32) {
     self.prev = prev;
     self.next = next;

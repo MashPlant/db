@@ -63,7 +63,6 @@ impl<const T: BareTy> Index<{ T }> {
     IndexIter { db: self.db(), page, slot, rid_off: self.rid_off }
   }
 
-  #[inline(always)]
   pub unsafe fn contains(&self, x: *const u8) -> bool {
     self.pr().lower_bound(x) != self.pr().upper_bound(x)
   }

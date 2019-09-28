@@ -30,7 +30,6 @@ impl<const T: BareTy> Index<{ T }> {
     Index { db: NonNull::new_unchecked(db), root, col, rid_off, _p: PhantomData }
   }
 
-  #[inline(always)]
   unsafe fn db<'a>(&mut self) -> &'a mut Db { self.db.as_ptr().r() }
 
   pub unsafe fn insert(&mut self, data: *const u8, rid: Rid) {

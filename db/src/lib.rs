@@ -12,7 +12,6 @@ use chrono::NaiveDate;
 // `ptr` points to the location in this record where `val` should locate, not the start address of data slot
 // caller should guarantee `val` IS NOT NULL
 // you can allocate some useless space for ptr to do error check
-#[inline(always)]
 pub unsafe fn fill_ptr(ptr: *mut u8, col: ColTy, val: Lit) -> Result<()> {
   match (col.ty, val) {
     (_, Lit::Null) => debug_unreachable!(),

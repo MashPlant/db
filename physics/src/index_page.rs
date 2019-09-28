@@ -16,7 +16,6 @@ pub struct IndexPage {
 pub const MAX_INDEX_BYTES: u32 = 8180;
 
 impl IndexPage {
-  #[inline(always)]
   pub fn init(&mut self, leaf: bool, ty_size: u16) {
     self.next = !0;
     self.count = 0;
@@ -26,9 +25,7 @@ impl IndexPage {
     self.cap = MAX_INDEX_BYTES as u16 / self.slot_size();
   }
   // `key` contains both data and rid
-  #[inline(always)]
   pub fn key_size(&self) -> u16 { self.rid_off + 4 }
-  #[inline(always)]
   pub fn slot_size(&self) -> u16 { self.key_size() + if self.leaf { 0 } else { 4 } }
 }
 

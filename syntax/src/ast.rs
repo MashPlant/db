@@ -99,12 +99,10 @@ pub enum Expr<'a> {
 }
 
 impl<'a> Expr<'a> {
-  #[inline(always)]
   pub fn lhs_col(&self) -> &ColRef<'a> {
     match self { Expr::Cmp(_, l, _) | Expr::Null(l, _) | Expr::Like(l, _) => l }
   }
 
-  #[inline(always)]
   pub fn rhs_col(&self) -> Option<&ColRef<'a>> {
     match self { Expr::Cmp(_, _, Atom::ColRef(r)) => Some(r), _ => None }
   }

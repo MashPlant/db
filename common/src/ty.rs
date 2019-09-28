@@ -18,13 +18,11 @@ impl ColTy {
   }
 
   // char and varchar can have size = 255 + 1, so u16 is necessary
-  #[inline(always)]
   pub fn size(self) -> u16 {
     use BareTy::*;
     match self.ty { Int => 4, Bool => 1, Float => 4, Char | VarChar => self.size as u16 + 1, Date => 4 }
   }
 
-  #[inline(always)]
   pub fn align4(self) -> bool {
     use BareTy::*;
     match self.ty { Int | Float | Date => true, Bool | Char | VarChar => false }
