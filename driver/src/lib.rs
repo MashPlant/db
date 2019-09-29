@@ -34,46 +34,36 @@ impl Eval {
 
   pub fn exec(&mut self, sql: &Stmt) -> Result<Cow<str>> {
     use Stmt::*;
-    match sql {
-      Insert(i) => { query::insert(i, self.db()?).map(|_| "".into()) }
-      Delete(d) => { query::delete(d, self.db()?).map(|_| "".into()) }
-      Select(s) => { query::select(s, self.db()?).map(|s| s.to_string().into()) }
-      Update(u) => { query::update(u, self.db()?).map(|_| "".into()) }
-      &CreateDb(path) => Db::create(path).map(|_| "".into()),
+    Ok(match sql {
+      Insert(i) => (query::insert(i, self.db()?)?, "".into()).1,
+      Delete(d) => (query::delete(d, self.db()?)?, "".into()).1,
+      Select(s) => query::select(s, self.db()?)?.to_csv()?.into(),
+      Update(u) => (query::update(u, self.db()?)?, "".into()).1,
+      &CreateDb(path) => (Db::create(path), "".into()).1,
       &DropDb(path) => {
         if Some(path) == self.db.as_ref().map(|db| db.path()) { self.db = None; }
-        std::fs::remove_file(path)?;
-        Ok("".into())
+        (std::fs::remove_file(path)?, "".into()).1
       }
       &ShowDb(path) => {
         let mut s = String::new();
-        show_db(path, &mut s)?;
-        Ok(s.into())
+        (show_db(path, &mut s)?, s.into()).1
       }
       ShowDbs => {
         let mut s = String::new();
         for e in fs::read_dir(".")? {
+          // `show_db` may fail because not all files are db format, just ignore these files
           let _ = show_db(e?.path(), &mut s);
         }
-        Ok(s.into())
+        s.into()
       }
-      &UseDb(name) => {
-        self.db = Some(Db::open(name)?);
-        Ok("".into())
-      }
-      CreateTable(c) => self.db()?.create_table(c).map(|_| "".into()),
-      &DropTable(name) => self.db()?.drop_table(name).map(|_| "".into()),
-      &ShowTable(name) => self.db()?.show_table(name).map(|s| s.into()),
-      ShowTables => Ok(self.db()?.show_tables().into()),
-      &CreateIndex(table, col) => {
-        index::create(self.db()?, table, col)?;
-        Ok("".into())
-      }
-      &DropIndex(table, col) => {
-        self.db()?.drop_index(table, col)?;
-        Ok("".into())
-      }
-    }
+      &UseDb(name) => (self.db = Some(Db::open(name)?), "".into()).1,
+      CreateTable(c) => (self.db()?.create_table(c)?, "".into()).1,
+      &DropTable(name) => (self.db()?.drop_table(name)?, "".into()).1,
+      &ShowTable(name) => self.db()?.show_table(name)?.into(),
+      ShowTables => self.db()?.show_tables().into(),
+      &CreateIndex(table, col) => (index::create(self.db()?, table, col)?, "".into()).1,
+      &DropIndex(table, col) => (self.db()?.drop_index(table, col)?, "".into()).1
+    })
   }
 
   fn db(&mut self) -> Result<&mut Db> { self.db.as_mut().ok_or(NoDbInUse) }

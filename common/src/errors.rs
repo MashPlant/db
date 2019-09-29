@@ -1,7 +1,14 @@
-use crate::{MAGIC_LEN, ColTy, BareTy, LitTy, OwnedLit};
+use crate::{MAGIC_LEN, ColTy, BareTy, LitTy, OwnedLit, AggOp};
 
 #[derive(Debug)]
-pub enum ParserError {
+pub struct ParserError {
+  pub line: u32,
+  pub col: u32,
+  pub kind: ParserErrorKind,
+}
+
+#[derive(Debug)]
+pub enum ParserErrorKind {
   SyntaxError,
   UnrecognizedChar(char),
   TypeSizeTooLarge(Box<str>),
@@ -44,8 +51,6 @@ pub enum Error {
   InsertNoExistOnForeignKey { col: Box<str>, val: OwnedLit },
   InsertDupCompositePrimaryKey,
   InsertNotInCheck { col: Box<str>, val: OwnedLit },
-  // CmpOnNull if lit is null (if data in db is null, != returns true, all others returns false)
-  CmpOnNull,
   InvalidDate { date: Box<str>, reason: chrono::ParseError },
   // below 2 not supported
   UpdateWithIndex(Box<str>),
@@ -56,6 +61,8 @@ pub enum Error {
   DupCheck(Box<str>),
   CheckNull(Box<str>),
   CheckTooLong(Box<str>, usize),
+  InvalidAgg { col: ColTy, op: AggOp },
+  CSV(csv::Error),
   IO(std::io::Error),
 }
 
@@ -63,4 +70,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 impl From<std::io::Error> for Error {
   fn from(e: std::io::Error) -> Self { Error::IO(e) }
+}
+
+impl From<csv::Error> for Error {
+  fn from(e: csv::Error) -> Self { Error::CSV(e) }
 }

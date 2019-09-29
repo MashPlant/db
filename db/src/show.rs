@@ -1,14 +1,17 @@
 use std::{fmt::Write, path::Path};
+use unchecked_unwrap::UncheckedUnwrap;
 
 use common::{*, Error::*};
 use physics::*;
 use crate::db::Db;
 
 pub fn show_db(path: impl AsRef<Path>, s: &mut String) -> Result<()> {
-  let mut db = Db::open(path)?;
-  let tables = unsafe { db.get_page::<DbPage>(0).table_num };
-  let _ = writeln!(s, "database `{}`: page count = {}, table count = {}", db.path, db.pages, tables);
-  Ok(())
+  unsafe {
+    let mut db = Db::open(path)?;
+    let tables = db.get_page::<DbPage>(0).table_num;
+    writeln!(s, "database `{}`: page count = {}, table count = {}", db.path, db.pages, tables).unchecked_unwrap();
+    Ok(())
+  }
 }
 
 impl Db {
@@ -39,10 +42,10 @@ impl Db {
 
   unsafe fn show_table_info(&mut self, ti: &TableInfo, s: &mut String) {
     let tp = self.get_page::<TablePage>(ti.meta as usize);
-    let _ = writeln!(s, "table `{}`: record count = {}, record size = {}",
-                     str_from_parts(ti.name.as_ptr(), ti.name_len as usize), tp.count, tp.size);
+    writeln!(s, "table `{}`: record count = {}, record size = {}",
+                     str_from_parts(ti.name.as_ptr(), ti.name_len as usize), tp.count, tp.size).unchecked_unwrap();
     for (idx, ci) in tp.cols().iter().enumerate() {
-      let _ = write!(s, "  - col {}: `{}`: {:?} @ offset +{}; ", idx, str_from_parts(ci.name.as_ptr(), ci.name_len as usize), ci.ty, ci.off);
+      write!(s, "  - col {}: `{}`: {:?} @ offset +{}; ", idx, str_from_parts(ci.name.as_ptr(), ci.name_len as usize), ci.ty, ci.off).unchecked_unwrap();
       if ci.flags.contains(ColFlags::PRIMARY) { s.push_str("primary "); }
       if ci.flags.contains(ColFlags::NOTNULL) { s.push_str("notnull "); }
       if ci.flags.contains(ColFlags::UNIQUE) { s.push_str("unique "); }

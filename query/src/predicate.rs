@@ -8,8 +8,8 @@ use crate::is_null;
 macro_rules! handle_op {
   ($cmp: ident, $op:expr, $p: ident, $l: expr, $r: expr) => {
     match $op {
-      Lt => $cmp!(<, false, $p, $l, $r), Le => $cmp!(<=, false, $p, $l, $r), Ge => $cmp!(>=, false, $p, $l, $r),
-      Gt => $cmp!(>, false, $p, $l, $r), Eq => $cmp!(==, false, $p, $l, $r), Ne => $cmp!(!=, true, $p, $l, $r),
+      Lt => $cmp!(<, $p, $l, $r), Le => $cmp!(<=, $p, $l, $r), Ge => $cmp!(>=, $p, $l, $r),
+      Gt => $cmp!(>, $p, $l, $r), Eq => $cmp!(==, $p, $l, $r), Ne => $cmp!(!=, $p, $l, $r),
     }
   };
 }
@@ -25,16 +25,11 @@ pub unsafe fn one_predicate(e: &Expr, tp: &TablePage) -> Result<Box<dyn Fn(*cons
     Expr::Cmp(op, _, r) => match r {
       &Atom::Lit(r) => {
         macro_rules! cmp {
-          ($op: tt, $nullable: expr, $p: ident, $l: expr, $r: expr) => {
-            Ok(Box::new(move |$p| {
-              if is_null($p, l_id) { return $nullable; }
-              $l $op $r
-            }))
-          };
+          ($op: tt, $p: ident, $l: expr, $r: expr) => { Ok(Box::new(move |$p| !is_null($p, l_id) && $l $op $r)) };
         }
         // the match logic is basically the same as the logic in `fill_ptr`, though the content is different
         match (l.ty.ty, r) {
-          (_, Lit::Null) => Err(CmpOnNull),
+          (_, Lit::Null) => Ok(Box::new(|_| false)), // comparing with null always returns false
           (Int, Lit::Int(v)) => handle_op!(cmp, op, p, *(p.add(l_off) as *const i32), v),
           (Bool, Lit::Bool(v)) => handle_op!(cmp, op, p, *(p.add(l_off) as *const bool), v),
           (Float, Lit::Float(v)) => handle_op!(cmp, op, p, *(p.add(l_off) as *const f32), v),
@@ -57,12 +52,7 @@ pub unsafe fn one_predicate(e: &Expr, tp: &TablePage) -> Result<Box<dyn Fn(*cons
         let r_idx = (r as *const ColInfo).offset_from(tp.cols.as_ptr()) as usize;
         let r_off = r.off as usize;
         macro_rules! cmp {
-          ($op: tt, $nullable: expr, $p: ident, $l: expr, $r: expr) => {
-            Ok(Box::new(move |$p| {
-              if is_null($p, l_id) || is_null($p, r_idx) { return $nullable; }
-              $l $op $r
-            }))
-          };
+          ($op: tt, $p: ident, $l: expr, $r: expr) => { Ok(Box::new(move |$p| !is_null($p, l_id) && !is_null($p, r_idx) && $l $op $r)) };
         }
         match (l.ty.ty, r.ty.ty) {
           (Int, Int) => handle_op!(cmp, op, p, *(p.add(l_off) as *const i32), *(p.add(r_off) as *const i32)),
@@ -100,13 +90,7 @@ pub unsafe fn cross_predicate(op: CmpOp, col: (&ColInfo, &ColInfo), tp: (&TableP
   let r_idx = (r as *const ColInfo).offset_from(tp.1.cols.as_ptr()) as usize;
   let r_off = r.off as usize;
   macro_rules! cmp {
-    ($op: tt, $nullable: expr, $p: ident, $l: expr, $r: expr) => {
-      Ok(Box::new(move |$p| {
-        if is_null($p.0, l_id) { return $nullable; }
-        if is_null($p.1, r_idx) { return $nullable; }
-        $l $op $r
-      }))
-    };
+    ($op: tt, $p: ident, $l: expr, $r: expr) => { Ok(Box::new(move |$p| !is_null($p.0, l_id) && !is_null($p.1, r_idx) && $l $op $r)) };
   }
   match (l.ty.ty, r.ty.ty) {
     (Int, Int) => handle_op!(cmp, op, p, *(p.0.add(l_off) as *const i32), *(p.1.add(r_off) as *const i32)),

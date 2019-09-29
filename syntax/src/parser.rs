@@ -1,9 +1,9 @@
 use parser_macros::lalr1;
-use common::{BareTy::{*, self}, ParserError::{*, self}, Error, Lit, ColTy};
+use common::{BareTy::{*, self}, ParserError as PE, ParserErrorKind::*, Error, Lit, ColTy, AggOp};
 use crate::ast::*;
 
 #[derive(Default)]
-pub struct Parser(Vec<ParserError>);
+pub struct Parser(Vec<PE>);
 
 impl<'p> Token<'p> {
   fn str_trim(&self) -> &'p str { std::str::from_utf8(&self.piece[1..self.piece.len() - 1]).unwrap() }
@@ -16,8 +16,8 @@ pub fn work(code: &str) -> std::result::Result<Vec<Stmt>, Error> {
     Ok(ss) if p.0.is_empty() => Ok(ss),
     Err(t) => {
       match t.ty {
-        TokenKind::_Err => p.0.push(UnrecognizedChar(t.piece[0] as char)),
-        _ => p.0.push(SyntaxError),
+        TokenKind::_Err => p.0.push(PE { line: t.line, col: t.col, kind: UnrecognizedChar(t.piece[0] as char) }),
+        _ => p.0.push(PE { line: t.line, col: t.col, kind: SyntaxError }),
       }
       Err(Error::ParserErrors(p.0.into()))
     }
@@ -53,6 +53,7 @@ priority = []
 '(a|A)(v|V)(g|G)' = 'Avg'
 '(m|M)(i|I)(n|N)' = 'Min'
 '(m|M)(a|A)(x|X)' = 'Max'
+'(c|C)(o|O)(u|U)(n|N)(t|T)' = 'Count'
 '(n|N)(o|O)(t|T)\s+(n|N)(u|U)(l|L)(l|L)' = 'NotNull'
 '(p|P)(r|R)(i|I)(m|M)(a|A)(r|R)(y|Y)\s+(k|K)(e|E)(y|Y)' = 'PrimaryKey'
 '(f|F)(o|O)(r|R)(e|E)(i|I)(g|G)(n|N)\s+(k|K)(e|E)(y|Y)' = 'ForeignKey'
@@ -109,13 +110,9 @@ impl<'p> Parser {
   #[rule(Stmt -> Drop Table Id)]
   fn stmt_drop_table(_: Token, _: Token, t: Token) -> Stmt<'p> { Stmt::DropTable(t.str()) }
   #[rule(Stmt -> Create Index Id LParen Id RParen)]
-  fn stmt_create_index(_: Token, _: Token, t: Token, _: Token, c: Token, _: Token) -> Stmt<'p> {
-    Stmt::CreateIndex(t.str(), c.str())
-  }
+  fn stmt_create_index(_: Token, _: Token, t: Token, _: Token, c: Token, _: Token) -> Stmt<'p> { Stmt::CreateIndex(t.str(), c.str()) }
   #[rule(Stmt -> Drop Index Id LParen Id RParen)]
-  fn stmt_drop_index(_: Token, _: Token, t: Token, _: Token, c: Token, _: Token) -> Stmt<'p> {
-    Stmt::DropIndex(t.str(), c.str())
-  }
+  fn stmt_drop_index(_: Token, _: Token, t: Token, _: Token, c: Token, _: Token) -> Stmt<'p> { Stmt::DropIndex(t.str(), c.str()) }
   #[rule(Stmt -> Create Table Id LParen ColDeclList ConsListM RParen)]
   fn stmt_create_table(_: Token, _: Token, t: Token, _: Token, cols: Vec<ColDecl<'p>>, cons: Vec<TableCons<'p>>, _: Token) -> Stmt<'p> {
     Stmt::CreateTable(CreateTable { name: t.str(), cols, cons })
@@ -221,6 +218,8 @@ impl<'p> Parser {
   fn agg_min(_: Token, _: Token, col: ColRef<'p>, _: Token) -> Agg<'p> { Agg { col, op: AggOp::Min } }
   #[rule(Agg -> Max LParen ColRef RParen)]
   fn agg_max(_: Token, _: Token, col: ColRef<'p>, _: Token) -> Agg<'p> { Agg { col, op: AggOp::Max } }
+  #[rule(Agg -> Count LParen ColRef RParen)]
+  fn agg_count(_: Token, _: Token, col: ColRef<'p>, _: Token) -> Agg<'p> { Agg { col, op: AggOp::Count } }
 
   #[rule(ColRef -> Id)]
   fn col_ref0(c: Token) -> ColRef<'p> { ColRef { table: None, col: c.str() } }
@@ -260,8 +259,8 @@ impl<'p> Parser {
   fn lit_null(_: Token) -> Lit<'p> { Lit::Null }
   #[rule(Lit -> IntLit)]
   fn lit_int(&mut self, t: Token) -> Lit<'p> {
-    let s = t.str();
-    Lit::Int(s.parse().unwrap_or_else(|_| (self.0.push(InvalidInt(s.into())), 0).1))
+    let (s, line, col) = (t.str(), t.line, t.col);
+    Lit::Int(s.parse().unwrap_or_else(|_| (self.0.push(PE { line, col, kind: InvalidInt(s.into()) }), 0).1))
   }
   #[rule(Lit -> True)]
   fn lit_true(_: Token) -> Lit<'p> { Lit::Bool(true) }
@@ -269,8 +268,8 @@ impl<'p> Parser {
   fn lit_false(_: Token) -> Lit<'p> { Lit::Bool(false) }
   #[rule(Lit -> FloatLit)]
   fn lit_float(&mut self, t: Token) -> Lit<'p> {
-    let s = t.str();
-    Lit::Float(s.parse().unwrap_or_else(|_| (self.0.push(InvalidFloat(s.into())), 0.0).1))
+    let (s, line, col) = (t.str(), t.line, t.col);
+    Lit::Float(s.parse().unwrap_or_else(|_| (self.0.push(PE { line, col, kind: InvalidFloat(s.into()) }), 0.0).1))
   }
   #[rule(Lit -> StrLit)]
   fn lit_str(t: Token) -> Lit<'p> { Lit::Str(t.str_trim()) }
@@ -290,8 +289,8 @@ impl<'p> Parser {
 
   #[rule(ColTy -> BareTy LParen IntLit RParen)]
   fn col_ty(&mut self, ty: BareTy, _: Token, t: Token, _: Token) -> ColTy {
-    let s = t.str();
-    ColTy { size: s.parse().unwrap_or_else(|_| (self.0.push(TypeSizeTooLarge(s.into())), 0).1), ty }
+    let (s, line, col) = (t.str(), t.line, t.col);
+    ColTy { size: s.parse().unwrap_or_else(|_| (self.0.push(PE { line, col, kind: TypeSizeTooLarge(s.into()) }), 0).1), ty }
   }
   #[rule(ColTy -> Int)]
   fn col_ty_int(_: Token) -> ColTy { ColTy { size: 0, ty: Int } }

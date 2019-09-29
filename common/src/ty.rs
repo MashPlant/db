@@ -1,4 +1,6 @@
-use std::fmt;
+use std::{fmt, cmp::Ordering};
+use unchecked_unwrap::UncheckedUnwrap;
+use chrono::NaiveDate;
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -35,6 +37,11 @@ pub enum Lit<'a> { Null, Int(i32), Bool(bool), Float(f32), Str(&'a str) }
 
 pub enum OwnedLit { Null, Int(i32), Bool(bool), Float(f32), Str(Box<str>) }
 
+// add f64 and date, these 2 cannot be produced by parser
+// LitExt is to pass result of `select`
+#[derive(Copy, Clone, PartialOrd, PartialEq)]
+pub enum LitExt<'a> { Null, Int(i32), Bool(bool), Float(f32), Str(&'a str), Date(NaiveDate), F64(f64) }
+
 #[derive(Debug)]
 pub enum LitTy { Null, Int, Bool, Float, Str }
 
@@ -57,6 +64,16 @@ impl Lit<'_> {
   }
 }
 
+// these 2 trais must be implemented manually because Lit contains f32
+// it is okay to implement them, because NaN can never appear in LitExt
+impl Eq for LitExt<'_> {}
+
+impl Ord for LitExt<'_> {
+  fn cmp(&self, other: &Self) -> Ordering {
+    unsafe { self.partial_cmp(other).unchecked_unwrap() }
+  }
+}
+
 impl fmt::Debug for ColTy {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{:?}({})", self.ty, self.size) }
 }
@@ -64,10 +81,37 @@ impl fmt::Debug for ColTy {
 impl fmt::Debug for Lit<'_> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     use Lit::*;
-    match self { Null => write!(f, "null"), Int(x) => write!(f, "{}", x), Bool(x) => write!(f, "{}", x), Float(x) => write!(f, "{}f", x), Str(x) => write!(f, "'{}'", x) }
+    match self {
+      Null => write!(f, "null"), Int(x) => write!(f, "{}", x), Bool(x) => write!(f, "{}", x),
+      Float(x) => write!(f, "{}f", x), Str(x) => write!(f, "'{}'", x)
+    }
   }
 }
 
 impl fmt::Debug for OwnedLit {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{:?}", Lit::from_owned(self)) }
+}
+
+// some tiny modifications comparing to Lit, because this is output to a csv file
+impl fmt::Debug for LitExt<'_> {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    use LitExt::*;
+    match self {
+      Null => Ok(()), Int(x) => write!(f, "{}", x), Bool(x) => write!(f, "{}", x),
+      Float(x) => write!(f, "{}", x), Str(x) => write!(f, "{}", x),
+      Date(x) => write!(f, "{}", x), F64(x) => write!(f, "{}", x)
+    }
+  }
+}
+
+// Agg, Sum is available for Int, Bool, Float
+// None, Min, Max, Count is available for all
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+pub enum AggOp { None, Avg, Sum, Min, Max, Count }
+
+impl AggOp {
+  pub fn name(self) -> Option<&'static str> {
+    use AggOp::*;
+    match self { None => Option::None, Avg => Some("avg"), Sum => Some("sum"), Min => Some("min"), Max => Some("max"), Count => Some("count") }
+  }
 }

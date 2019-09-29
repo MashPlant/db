@@ -48,6 +48,7 @@ pub struct Delete<'a> {
   pub where_: Vec<Expr<'a>>,
 }
 
+#[derive(Copy, Clone)]
 pub struct ColRef<'a> {
   pub table: Option<&'a str>,
   pub col: &'a str,
@@ -59,9 +60,6 @@ pub struct Agg<'a> {
   pub col: ColRef<'a>,
   pub op: AggOp,
 }
-
-#[derive(Debug)]
-pub enum AggOp { None, Avg, Sum, Min, Max }
 
 #[derive(Debug)]
 pub struct CreateTable<'a> {
@@ -112,9 +110,8 @@ impl<'a> Expr<'a> {
 pub enum CmpOp { Lt, Le, Ge, Gt, Eq, Ne }
 
 impl CmpOp {
-  pub fn str(self) -> &'static str {
-    use CmpOp::*;
-    match self { Lt => "<", Le => "<=", Ge => ">=", Gt => ">", Eq => "==", Ne => "!=" }
+  pub fn name(self) -> &'static str {
+    match self { CmpOp::Lt => "<", CmpOp::Le => "<=", CmpOp::Ge => ">=", CmpOp::Gt => ">", CmpOp::Eq => "==", CmpOp::Ne => "!=" }
   }
 }
 
@@ -139,7 +136,7 @@ impl fmt::Debug for Atom<'_> {
 impl fmt::Debug for Expr<'_> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match self {
-      Expr::Cmp(op, l, r) => write!(f, "{:?} {} {:?}", l, op.str(), r),
+      Expr::Cmp(op, l, r) => write!(f, "{:?} {} {:?}", l, op.name(), r),
       Expr::Null(c, null) => write!(f, "{:?} is {}null", c, if *null { "" } else { "not " }),
       Expr::Like(c, s) => write!(f, "{:?} like '{}'", c, s),
     }

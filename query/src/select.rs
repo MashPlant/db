@@ -1,4 +1,3 @@
-use std::fmt;
 use chrono::NaiveDate;
 use unchecked_unwrap::UncheckedUnwrap;
 use csv::Writer;
@@ -7,35 +6,122 @@ use common::{*, BareTy::*, Error::*};
 use syntax::ast::*;
 use physics::*;
 use db::Db;
-use crate::predicate::{and, one_predicate, cross_predicate};
-use crate::filter::filter;
+use crate::{predicate::{and, one_predicate, cross_predicate}, filter::filter, is_null};
 
-pub struct SelectResult {
-  // tbl[i] correspond to a table
-  pub tbl: Vec<Vec<&'static ColInfo>>,
-  // data[i] is one line, data[i].len() == tbl.len()
-  pub data: Vec<Vec<*const u8>>,
+#[derive(Copy, Clone)]
+pub struct Col {
+  pub op: AggOp,
+  // index of ci in table page, used to access null bit
+  pub idx: u32,
+  pub ci: &'static ColInfo,
 }
 
-impl fmt::Display for SelectResult {
-  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    unsafe {
-      let mut wt = Writer::from_writer(vec![]);
-      wt.write_record(self.tbl.iter().flat_map(|tbl| tbl.iter().map(|col| col.name()))).unwrap();
-      for data in &self.data {
-        debug_assert_eq!(data.len(), self.tbl.len());
-        wt.write_record(data.iter().zip(self.tbl.iter()).flat_map(|(data, tbl)| tbl.iter().map(move |col| {
-          let ptr = data.add(col.off as usize);
-          match col.ty.ty {
-            Int => (*(ptr as *const i32)).to_string(),
-            Bool => (*(ptr as *const bool)).to_string(),
-            Float => (*(ptr as *const f32)).to_string(),
-            Char | VarChar => str_from_parts(ptr.add(1), *ptr as usize).to_owned(),
-            Date => (*(ptr as *const NaiveDate)).to_string(),
-          }
-        }))).unwrap();
+pub struct SelectResult {
+  pub cols: Vec<Col>,
+  // `data` is a 2-d array of data cell (Either<...>)
+  // its col size = cols.len()
+  // since Lit doesn't contain NaiveDate, we need to use an Either here
+  pub data: Vec<LitExt<'static>>,
+}
+
+unsafe fn ptr2lit(data: *const u8, col: &Col) -> LitExt<'static> {
+  if is_null(data, col.idx as usize) { return LitExt::Null; };
+  let ptr = data.add(col.ci.off as usize);
+  match col.ci.ty.ty {
+    Int => LitExt::Int(*(ptr as *const i32)),
+    Bool => LitExt::Bool(*(ptr as *const bool)),
+    Float => LitExt::Float(*(ptr as *const f32)),
+    Char | VarChar => LitExt::Str(str_from_parts(ptr.add(1), *ptr as usize)),
+    Date => LitExt::Date(*(ptr as *const NaiveDate)),
+  }
+}
+
+impl SelectResult {
+  // tbls[i] <-> data[i], both belongs to a table
+  unsafe fn new(tbls: &[Vec<Col>], data: &[Vec<*const u8>]) -> SelectResult {
+    for row in data {
+      debug_assert_eq!(tbls.len(), row.len());
+    }
+    // if has agg, only keep one row (at least this is how sqlite behaves)
+    let has_agg = tbls.iter().flatten().any(|col| col.op != AggOp::None);
+    let data = if has_agg {
+      if data.is_empty() { Vec::new() } else {
+        tbls.iter().enumerate().flat_map(|(idx, tbl)| {
+          tbl.iter().map(move |col| {
+            match col.op {
+              AggOp::None => {
+                // only take the first row
+                ptr2lit(*data.get_unchecked(0).get_unchecked(idx), col)
+              }
+              AggOp::Avg | AggOp::Sum => { // only accept Int, Float, Bool, checked in mk_tbls
+                let mut sum = 0.0; // use f64 for better precision (cover i32)
+                for row in data {
+                  let data = *row.get_unchecked(idx);
+                  if !is_null(data, col.idx as usize) {
+                    let ptr = data.add(col.ci.off as usize);
+                    match col.ci.ty.ty {
+                      Int => sum += *(ptr as *const i32) as f64,
+                      Bool => sum += *(ptr as *const bool) as i8 as f64,
+                      Float => sum += *(ptr as *const f32) as f64,
+                      _ => debug_unreachable!(),
+                    }
+                  }
+                }
+                if col.op == AggOp::Avg { sum /= data.len() as f64; }
+                LitExt::F64(sum)
+              }
+              AggOp::Min | AggOp::Max => {
+                let it = data.iter().map(|row| {
+                  ptr2lit(*row.get_unchecked(idx), col)
+                });
+                // we don't want to select null as min/max here, so let null be the min in max(), be the max in min()
+                // since Null is the first variant in the enum, "null be the min in max()" is the natural order
+                if col.op == AggOp::Max { it.max() } else {
+                  use std::cmp::Ordering::*;
+                  it.min_by(|l, r| match (l, r) {
+                    (LitExt::Null, LitExt::Null) => Equal,
+                    (LitExt::Null, _) => Greater,
+                    (_, LitExt::Null) => Less,
+                    (l, r) => l.cmp(r)
+                  })
+                }.unchecked_unwrap()
+              }
+              AggOp::Count => LitExt::Int(data.len() as i32)
+            }
+          })
+        }).collect()
       }
-      write!(f, "{}", String::from_utf8(wt.into_inner().unwrap()).unwrap())
+    } else {
+      data.iter().flat_map(|row| row.iter().zip(tbls.iter()).flat_map(|(&data, tbl)| {
+        tbl.iter().map(move |col| ptr2lit(data, col))
+      })).collect()
+    };
+    SelectResult { cols: tbls.iter().flatten().copied().collect(), data }
+  }
+
+  pub fn row_count(&self) -> usize {
+    debug_assert_eq!(self.data.len() % self.cols.len(), 0);
+    self.data.len() / self.cols.len()
+  }
+
+  // actually I don't believe any error can happen when making csv
+  // it is just because I am not familiar enough with this lib, or I will definitely use unchecked_unwrap everywhere
+  pub fn to_csv(&self) -> Result<String> {
+    unsafe {
+      let mut csv = Vec::new();
+      let mut wt = Writer::from_writer(&mut csv);
+      for &Col { op, ci, .. } in &self.cols {
+        if let Some(op) = op.name() {
+          wt.write_field(format!("{}({})", op, ci.name()))?;
+        } else { wt.write_field(ci.name())?; };
+      }
+      wt.write_record(None::<&[u8]>)?;
+      for i in 0..self.row_count() {
+        let row = self.data.get_unchecked(i * self.cols.len()..(i + 1) * self.cols.len());
+        wt.write_record(row.iter().map(|data| format!("{:?}", data)))?;
+      }
+      drop(wt);
+      Ok(String::from_utf8_unchecked(csv))
     }
   }
 }
@@ -59,22 +145,25 @@ unsafe fn one_where<'a>(cr: &ColRef, ctx: &InsertCtx) -> Result<(&'a TablePage, 
   }
 }
 
-unsafe fn mk_tbl<'a>(ops: &Option<Vec<Agg>>, ctx: &InsertCtx) -> Result<Vec<Vec<&'a ColInfo>>> {
+// the validity of AggOp is checked here
+unsafe fn mk_tbls<'a>(ops: &Option<Vec<Agg>>, ctx: &InsertCtx) -> Result<Vec<Vec<Col>>> {
   if let Some(ops) = &ops {
     let mut ret = vec![vec![]; ctx.tbls.len()];
-    for op in ops {
-      match op.op {
-        AggOp::None => {
-          let (_, ci, idx) = one_where(&op.col, ctx)?;
-          debug_assert!(idx < ret.len());
-          ret.get_unchecked_mut(idx).push(ci);
-        }
-        _ => unimplemented!()
+    for &Agg { op, col } in ops {
+      let (tp, ci, idx) = one_where(&col, ctx)?;
+      debug_assert!(idx < ret.len());
+      let ty = ci.ty.ty;
+      if (op == AggOp::Avg || op == AggOp::Sum) && ty != Int && ty != Float && ty != Bool {
+        return Err(InvalidAgg { col: ci.ty, op });
       }
+      let ci_id = (ci as *const ColInfo).offset_from(tp.cols.as_ptr()) as u32;
+      ret.get_unchecked_mut(idx).push(Col { op, idx: ci_id, ci });
     }
     Ok(ret)
   } else { // select *
-    Ok(ctx.tbls.iter().map(|(_, &tp)| tp.1.cols().iter().collect()).collect())
+    Ok(ctx.tbls.iter().map(|(_, &(_, tp))| {
+      tp.cols().iter().enumerate().map(|(idx, ci)| Col { op: AggOp::None, idx: idx as u32, ci }).collect()
+    }).collect())
   }
 }
 
@@ -97,7 +186,7 @@ pub fn select(s: &Select, db: &mut Db) -> Result<SelectResult> {
     }
     debug_assert_eq!(tbls.len(), s.tables.len());
     let ctx = InsertCtx { tbls, cols };
-    let result_tbl = mk_tbl(&s.ops, &ctx)?;
+    let result_tbls = mk_tbls(&s.ops, &ctx)?;
 
     let mut one_preds = Vec::with_capacity(s.tables.len());
     let mut one_wheres = vec![vec![]; s.tables.len()];
@@ -160,6 +249,6 @@ pub fn select(s: &Select, db: &mut Db) -> Result<SelectResult> {
       }
       tbl_idx_l = tbl_idx_r;
     }
-    Ok(SelectResult { tbl: result_tbl, data: res_l })
+    Ok(SelectResult::new(&result_tbls, &res_l))
   }
 }
