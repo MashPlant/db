@@ -1,3 +1,4 @@
+#![feature(ptr_offset_from)]
 #[macro_use]
 extern crate static_assertions;
 
@@ -25,5 +26,3 @@ pub type HashMap<K, V> = hashbrown::HashMap<K, V>;
 pub type HashSet<K> = hashbrown::HashSet<K>;
 pub type HashEntry<'a, K, V> = hashbrown::hash_map::Entry<'a, K, V, hashbrown::hash_map::DefaultHashBuilder>;
 pub type IndexEntry<'a, K, V> = indexmap::map::Entry<'a, K, V>;
-
-pub type WithId<T> = (usize, T);

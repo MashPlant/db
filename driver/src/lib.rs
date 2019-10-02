@@ -32,7 +32,7 @@ impl Eval {
     })
   }
 
-  pub fn exec(&mut self, sql: &Stmt) -> Result<Cow<str>> {
+  pub fn exec<'a>(&mut self, sql: &Stmt<'a>) -> Result<'a, Cow<str>> {
     use Stmt::*;
     Ok(match sql {
       Insert(i) => (query::insert(i, self.db()?)?, "".into()).1,
@@ -66,5 +66,5 @@ impl Eval {
     })
   }
 
-  fn db(&mut self) -> Result<&mut Db> { self.db.as_mut().ok_or(NoDbInUse) }
+  fn db<'a>(&mut self) -> Result<'a, &mut Db> { self.db.as_mut().ok_or(NoDbInUse) }
 }

@@ -54,11 +54,10 @@ pub struct ColRef<'a> {
   pub col: &'a str,
 }
 
-// Agg for Aggregation
-#[derive(Debug)]
+// Agg is short for Aggregation
 pub struct Agg<'a> {
   pub col: ColRef<'a>,
-  pub op: AggOp,
+  pub op: Option<AggOp>,
 }
 
 #[derive(Debug)]
@@ -126,12 +125,17 @@ impl fmt::Debug for ColRef<'_> {
   }
 }
 
+impl fmt::Debug for Agg<'_> {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    if let Some(op) = self.op { write!(f, "{}({:?})", op.name(), self.col) } else { write!(f, "{:?}", self.col) }
+  }
+}
+
 impl fmt::Debug for Atom<'_> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match self { Atom::ColRef(c) => write!(f, "{:?}", c), Atom::Lit(l) => write!(f, "{:?}", l) }
   }
 }
-
 
 impl fmt::Debug for Expr<'_> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -18,8 +18,10 @@ macro_rules! handle_op {
 // the pointer to the start address of the whole data slot
 
 // assume both lhs and rhs belongs to tp's table, so ColRef::table is not checked
-pub unsafe fn one_predicate(e: &Expr, tp: &TablePage) -> Result<Box<dyn Fn(*const u8) -> bool>> {
-  let (l_id, l) = tp.pr().get_ci(e.lhs_col().col)?;
+pub unsafe fn one_predicate<'a>(e: &Expr<'a>, tp: &TablePage) -> Result<'a, Box<dyn Fn(*const u8) -> bool>> {
+  let tp = tp.pr();
+  let l = tp.get_ci(e.lhs_col().col)?;
+  let l_id = l.idx(&tp.cols) as usize;
   let l_off = l.off as usize;
   match e {
     Expr::Cmp(op, _, r) => match r {
@@ -42,17 +44,17 @@ pub unsafe fn one_predicate(e: &Expr, tp: &TablePage) -> Result<Box<dyn Fn(*cons
           }
           (Date, Lit::Str(v)) => match NaiveDate::parse_from_str(v, "%Y-%m-%d") {
             Ok(date) => handle_op!(cmp, op, p, *(p.add(l_off) as *const NaiveDate), date),
-            Err(reason) => return Err(InvalidDate { date: (*v).into(), reason })
+            Err(reason) => return Err(InvalidDate { date: v, reason })
           }
           (expect, r) => return Err(RecordLitTyMismatch { expect, actual: r.ty() })
         }
       }
       Atom::ColRef(r) => {
-        let r = tp.pr().get_ci(r.col)?.1;
-        let r_idx = (r as *const ColInfo).offset_from(tp.cols.as_ptr()) as usize;
+        let r = tp.get_ci(r.col)?;
+        let r_id = r.idx(&tp.cols) as usize;
         let r_off = r.off as usize;
         macro_rules! cmp {
-          ($op: tt, $p: ident, $l: expr, $r: expr) => { Ok(Box::new(move |$p| !is_null($p, l_id) && !is_null($p, r_idx) && $l $op $r)) };
+          ($op: tt, $p: ident, $l: expr, $r: expr) => { Ok(Box::new(move |$p| !is_null($p, l_id) && !is_null($p, r_id) && $l $op $r)) };
         }
         match (l.ty.ty, r.ty.ty) {
           (Int, Int) => handle_op!(cmp, op, p, *(p.add(l_off) as *const i32), *(p.add(r_off) as *const i32)),
@@ -83,14 +85,12 @@ pub unsafe fn one_predicate(e: &Expr, tp: &TablePage) -> Result<Box<dyn Fn(*cons
   }
 }
 
-pub unsafe fn cross_predicate(op: CmpOp, col: (&ColInfo, &ColInfo), tp: (&TablePage, &TablePage)) -> Result<Box<dyn Fn((*const u8, *const u8)) -> bool>> {
+pub unsafe fn cross_predicate<'a>(op: CmpOp, col: (&ColInfo, &ColInfo), tp: (&TablePage, &TablePage)) -> Result<'a, Box<dyn Fn((*const u8, *const u8)) -> bool>> {
   let (l, r) = col;
-  let l_id = (l as *const ColInfo).offset_from(tp.0.cols.as_ptr()) as usize;
-  let l_off = l.off as usize;
-  let r_idx = (r as *const ColInfo).offset_from(tp.1.cols.as_ptr()) as usize;
-  let r_off = r.off as usize;
+  let (l_id, r_id) = (l.idx(&tp.0.cols) as usize, r.idx(&tp.1.cols) as usize);
+  let (l_off, r_off) = (l.off as usize, r.off as usize);
   macro_rules! cmp {
-    ($op: tt, $p: ident, $l: expr, $r: expr) => { Ok(Box::new(move |$p| !is_null($p.0, l_id) && !is_null($p.1, r_idx) && $l $op $r)) };
+    ($op: tt, $p: ident, $l: expr, $r: expr) => { Ok(Box::new(move |$p| !is_null($p.0, l_id) && !is_null($p.1, r_id) && $l $op $r)) };
   }
   match (l.ty.ty, r.ty.ty) {
     (Int, Int) => handle_op!(cmp, op, p, *(p.0.add(l_off) as *const i32), *(p.1.add(r_off) as *const i32)),
@@ -106,15 +106,15 @@ pub unsafe fn cross_predicate(op: CmpOp, col: (&ColInfo, &ColInfo), tp: (&TableP
   }
 }
 
-pub unsafe fn one_where(where_: &[Expr], table: &str, tp: &TablePage) -> Result<impl Fn(*const u8) -> bool> {
+pub unsafe fn one_where<'a>(where_: &[Expr<'a>], table: &str, tp: &TablePage) -> Result<'a, impl Fn(*const u8) -> bool> {
   let mut preds = Vec::with_capacity(where_.len());
   for e in where_ {
     let (l, r) = (e.lhs_col(), e.rhs_col());
     if let Some(t) = l.table {
-      if t != table { return Err(NoSuchTable(t.into())); }
+      if t != table { return Err(NoSuchTable(t)); }
     }
     if let Some(&ColRef { table: Some(t), .. }) = r {
-      if t != table { return Err(NoSuchTable(t.into())); }
+      if t != table { return Err(NoSuchTable(t)); }
     }
     // table name is checked before, col name & type & value format/size all checked in one_predicate
     preds.push(one_predicate(e, tp)?);

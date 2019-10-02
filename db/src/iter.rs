@@ -5,8 +5,9 @@ use physics::*;
 use crate::Db;
 
 impl Db {
-  pub unsafe fn record_iter(&mut self, tp: WithId<&TablePage>) -> RecordIter {
-    RecordIter { db: self.pr(), tp_id: tp.0 as u32, page: tp.1.next, slot: 0, slot_size: tp.1.size }
+  pub unsafe fn record_iter(&mut self, tp: &TablePage) -> RecordIter {
+    let tp_id = (tp as *const TablePage).offset_from(self.get_page(0)) as u32;
+    RecordIter { db: self.pr(), tp_id, page: tp.next, slot: 0, slot_size: tp.size }
   }
 }
 
@@ -27,8 +28,8 @@ impl Iterator for RecordIter<'_> {
       loop {
         if self.page == self.tp_id { return None; } // reach end of linked list
         // now self.page must be a valid data page id
-        let dp = self.db.get_page::<DataPage>(self.page as usize);
-        let cap = self.db.get_page::<TablePage>(self.tp_id as usize).cap;
+        let dp = self.db.get_page::<DataPage>(self.page);
+        let cap = self.db.get_page::<TablePage>(self.tp_id).cap;
         for i in self.slot as usize..cap as usize {
           if bsget(dp.used.as_ptr(), i) {
             self.slot = i as u16 + 1;

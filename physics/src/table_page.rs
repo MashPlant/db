@@ -26,7 +26,7 @@ pub struct ColInfo {
   pub foreign_col: u8,
   pub flags: ColFlags,
   pub name_len: u8,
-  pub name: [u8; MAX_COL_NAME as usize],
+  pub name: [u8; MAX_COL_NAME],
 }
 
 impl ColInfo {
@@ -63,11 +63,11 @@ pub struct TablePage {
   pub cap: u16,
   pub col_num: u8,
   pub _rsv: [u8; 43],
-  pub cols: [ColInfo; MAX_COL as usize],
+  pub cols: [ColInfo; MAX_COL],
 }
 
-pub const MAX_COL_NAME: u32 = 48;
-pub const MAX_COL: u32 = 127;
+pub const MAX_COL_NAME: usize = 48;
+pub const MAX_COL: usize = 127;
 
 impl TablePage {
   pub fn init(&mut self, id: u32, size: u16, col_num: u8) {
@@ -88,15 +88,10 @@ impl TablePage {
     std::slice::from_raw_parts(self.cols.as_ptr(), self.col_num as usize)
   }
 
-  pub unsafe fn cols_mut<'a>(&mut self) -> &'a mut [ColInfo] {
-    debug_assert!(self.col_num < MAX_COL as u8);
-    std::slice::from_raw_parts_mut(self.cols.as_mut_ptr(), self.col_num as usize)
-  }
-
-  pub unsafe fn get_ci<'a>(&mut self, col: &str) -> Result<WithId<&'a mut ColInfo>> {
+  pub unsafe fn get_ci<'a, 'b>(&mut self, col: &'b str) -> Result<'b, &'a mut ColInfo> {
     match self.pr().names().enumerate().find(|n| n.1 == col) {
-      Some((idx, _)) => Ok((idx, self.pr().cols.get_unchecked_mut(idx))),
-      None => return Err(NoSuchCol(col.into())),
+      Some((idx, _)) => Ok(self.pr().cols.get_unchecked_mut(idx)),
+      None => Err(NoSuchCol(col)),
     }
   }
 }

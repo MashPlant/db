@@ -5,7 +5,7 @@ use common::{*, Error::*};
 use physics::*;
 use crate::db::Db;
 
-pub fn show_db(path: impl AsRef<Path>, s: &mut String) -> Result<()> {
+pub fn show_db<'a>(path: impl AsRef<Path>, s: &mut String) -> Result<'a, ()> {
   unsafe {
     let mut db = Db::open(path)?;
     let tables = db.get_page::<DbPage>(0).table_num;
@@ -15,7 +15,7 @@ pub fn show_db(path: impl AsRef<Path>, s: &mut String) -> Result<()> {
 }
 
 impl Db {
-  pub fn show_table(&self, name: &str) -> Result<String> {
+  pub fn show_table<'a>(&self, name: &'a str) -> Result<'a, String> {
     unsafe {
       let selfm = self.pr();
       let dp = selfm.get_page::<DbPage>(0);
@@ -25,7 +25,7 @@ impl Db {
           selfm.show_table_info(dp.tables.get_unchecked(idx), &mut s);
           Ok(s)
         }
-        None => return Err(NoSuchTable(name.into())),
+        None => Err(NoSuchTable(name)),
       }
     }
   }
@@ -41,9 +41,9 @@ impl Db {
   }
 
   unsafe fn show_table_info(&mut self, ti: &TableInfo, s: &mut String) {
-    let tp = self.get_page::<TablePage>(ti.meta as usize);
+    let tp = self.get_page::<TablePage>(ti.meta);
     writeln!(s, "table `{}`: record count = {}, record size = {}",
-                     str_from_parts(ti.name.as_ptr(), ti.name_len as usize), tp.count, tp.size).unchecked_unwrap();
+             str_from_parts(ti.name.as_ptr(), ti.name_len as usize), tp.count, tp.size).unchecked_unwrap();
     for (idx, ci) in tp.cols().iter().enumerate() {
       write!(s, "  - col {}: `{}`: {:?} @ offset +{}; ", idx, str_from_parts(ci.name.as_ptr(), ci.name_len as usize), ci.ty, ci.off).unchecked_unwrap();
       if ci.flags.contains(ColFlags::PRIMARY) { s.push_str("primary "); }

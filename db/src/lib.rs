@@ -28,7 +28,7 @@ pub unsafe fn fill_ptr(ptr: *mut u8, col: ColTy, val: Lit) -> Result<()> {
     }
     (Date, Lit::Str(v)) => match NaiveDate::parse_from_str(v, "%Y-%m-%d") {
       Ok(date) => (ptr as *mut NaiveDate).write(date),
-      Err(reason) => return Err(InvalidDate { date: (*v).into(), reason })
+      Err(reason) => return Err(InvalidDate { date: v, reason })
     }
     _ => return Err(RecordLitTyMismatch { expect: col.ty, actual: val.ty() })
   }

@@ -3,7 +3,7 @@ use common::{BareTy::{*, self}, ParserError as PE, ParserErrorKind::*, Error, Li
 use crate::ast::*;
 
 #[derive(Default)]
-pub struct Parser(Vec<PE>);
+pub struct Parser<'a>(Vec<PE<'a>>);
 
 impl<'p> Token<'p> {
   fn str_trim(&self) -> &'p str { std::str::from_utf8(&self.piece[1..self.piece.len() - 1]).unwrap() }
@@ -91,7 +91,7 @@ priority = []
 "'[^'\\\\]*(\\\\.[^'\\\\]*)*'" = 'StrLit'
 '[A-Za-z][_0-9A-Za-z]*' = 'Id'
 "##)]
-impl<'p> Parser {
+impl<'p> Parser<'p> {
   #[rule(Program ->)]
   fn stmt_list0() -> Vec<Stmt<'p>> { vec![] }
   #[rule(Program -> Program Stmt Semicolon)]
@@ -209,17 +209,23 @@ impl<'p> Parser {
   }
 
   #[rule(Agg -> ColRef)]
-  fn agg0(col: ColRef<'p>) -> Agg<'p> { Agg { col, op: AggOp::None } }
+  fn agg0(col: ColRef<'p>) -> Agg<'p> { Agg { col, op: None } }
   #[rule(Agg -> Avg LParen ColRef RParen)]
-  fn agg_avg(_: Token, _: Token, col: ColRef<'p>, _: Token) -> Agg<'p> { Agg { col, op: AggOp::Avg } }
+  fn agg_avg(_: Token, _: Token, col: ColRef<'p>, _: Token) -> Agg<'p> { Agg { col, op: Some(AggOp::Avg) } }
   #[rule(Agg -> Sum LParen ColRef RParen)]
-  fn agg_sum(_: Token, _: Token, col: ColRef<'p>, _: Token) -> Agg<'p> { Agg { col, op: AggOp::Sum } }
+  fn agg_sum(_: Token, _: Token, col: ColRef<'p>, _: Token) -> Agg<'p> { Agg { col, op: Some(AggOp::Sum) } }
   #[rule(Agg -> Min LParen ColRef RParen)]
-  fn agg_min(_: Token, _: Token, col: ColRef<'p>, _: Token) -> Agg<'p> { Agg { col, op: AggOp::Min } }
+  fn agg_min(_: Token, _: Token, col: ColRef<'p>, _: Token) -> Agg<'p> { Agg { col, op:Some( AggOp::Min) } }
   #[rule(Agg -> Max LParen ColRef RParen)]
-  fn agg_max(_: Token, _: Token, col: ColRef<'p>, _: Token) -> Agg<'p> { Agg { col, op: AggOp::Max } }
+  fn agg_max(_: Token, _: Token, col: ColRef<'p>, _: Token) -> Agg<'p> { Agg { col, op: Some(AggOp::Max) } }
   #[rule(Agg -> Count LParen ColRef RParen)]
-  fn agg_count(_: Token, _: Token, col: ColRef<'p>, _: Token) -> Agg<'p> { Agg { col, op: AggOp::Count } }
+  fn agg_count(_: Token, _: Token, col: ColRef<'p>, _: Token) -> Agg<'p> { Agg { col, op: Some(AggOp::Count) } }
+  #[rule(Agg -> Count LParen Mul RParen)]
+  fn agg_count_all(_: Token, _: Token, _: Token, _: Token) -> Agg<'p> {
+    // for CountAll, `col` is not accessible (for compatibility, `col` is not defined as Option<ColRef>)
+    // "*" is just for the convenience of printing
+    Agg { col: ColRef { table: None, col: "*" }, op: Some(AggOp::CountAll) }
+  }
 
   #[rule(ColRef -> Id)]
   fn col_ref0(c: Token) -> ColRef<'p> { ColRef { table: None, col: c.str() } }
@@ -260,7 +266,7 @@ impl<'p> Parser {
   #[rule(Lit -> IntLit)]
   fn lit_int(&mut self, t: Token) -> Lit<'p> {
     let (s, line, col) = (t.str(), t.line, t.col);
-    Lit::Int(s.parse().unwrap_or_else(|_| (self.0.push(PE { line, col, kind: InvalidInt(s.into()) }), 0).1))
+    Lit::Int(s.parse().unwrap_or_else(|_| (self.0.push(PE { line, col, kind: InvalidInt(s) }), 0).1))
   }
   #[rule(Lit -> True)]
   fn lit_true(_: Token) -> Lit<'p> { Lit::Bool(true) }
@@ -269,7 +275,7 @@ impl<'p> Parser {
   #[rule(Lit -> FloatLit)]
   fn lit_float(&mut self, t: Token) -> Lit<'p> {
     let (s, line, col) = (t.str(), t.line, t.col);
-    Lit::Float(s.parse().unwrap_or_else(|_| (self.0.push(PE { line, col, kind: InvalidFloat(s.into()) }), 0.0).1))
+    Lit::Float(s.parse().unwrap_or_else(|_| (self.0.push(PE { line, col, kind: InvalidFloat(s) }), 0.0).1))
   }
   #[rule(Lit -> StrLit)]
   fn lit_str(t: Token) -> Lit<'p> { Lit::Str(t.str_trim()) }
@@ -290,7 +296,7 @@ impl<'p> Parser {
   #[rule(ColTy -> BareTy LParen IntLit RParen)]
   fn col_ty(&mut self, ty: BareTy, _: Token, t: Token, _: Token) -> ColTy {
     let (s, line, col) = (t.str(), t.line, t.col);
-    ColTy { size: s.parse().unwrap_or_else(|_| (self.0.push(PE { line, col, kind: TypeSizeTooLarge(s.into()) }), 0).1), ty }
+    ColTy { size: s.parse().unwrap_or_else(|_| (self.0.push(PE { line, col, kind: TypeSizeTooLarge(s) }), 0).1), ty }
   }
   #[rule(ColTy -> Int)]
   fn col_ty_int(_: Token) -> ColTy { ColTy { size: 0, ty: Int } }

@@ -1,10 +1,10 @@
-use common::*;
+use common::{*, Error::*};
 
 #[repr(C)]
 pub struct TableInfo {
   pub meta: u32,
   pub name_len: u8,
-  pub name: [u8; MAX_TABLE_NAME as usize],
+  pub name: [u8; MAX_TABLE_NAME],
 }
 
 impl TableInfo {
@@ -24,11 +24,11 @@ pub struct DbPage {
   pub table_num: u8,
   pub _rsv2: [u8; 39],
   // it is unpin, remove strategy = swap with last
-  pub tables: [TableInfo; MAX_TABLE as usize],
+  pub tables: [TableInfo; MAX_TABLE],
 }
 
-pub const MAX_TABLE_NAME: u32 = 59;
-pub const MAX_TABLE: u32 = 127;
+pub const MAX_TABLE_NAME: usize = 59;
+pub const MAX_TABLE: usize = 127;
 
 impl DbPage {
   pub fn init(&mut self) {
@@ -38,8 +38,8 @@ impl DbPage {
   }
 
   pub unsafe fn names<'a>(&'a self) -> impl Iterator<Item=&'a str> + 'a {
-    let table_num = self.table_num as usize;
-    self.tables.iter().enumerate().filter_map(move |(i, ti)| { if i < table_num { Some(ti.name()) } else { None } })
+    debug_assert!(self.table_num < MAX_TABLE as u8);
+    (0..self.table_num as usize).map(move |i| self.tables.get_unchecked(i).name())
   }
 
   pub unsafe fn tables<'a>(&self) -> &'a [TableInfo] {
@@ -47,9 +47,9 @@ impl DbPage {
     std::slice::from_raw_parts(self.tables.as_ptr(), self.table_num as usize)
   }
 
-  pub unsafe fn tables_mut<'a>(&mut self) -> &'a mut [TableInfo] {
-    debug_assert!(self.table_num < MAX_TABLE as u8);
-    std::slice::from_raw_parts_mut(self.tables.as_mut_ptr(), self.table_num as usize)
+  pub unsafe fn get_ti<'a, 'b>(&mut self, table: &'b str) -> Result<'b, &'a mut TableInfo> {
+    for t in self.tables() { if t.name() == table { return Ok(t.pr()); } }
+    Err(NoSuchTable(table))
   }
 }
 

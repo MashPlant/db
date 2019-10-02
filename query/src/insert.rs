@@ -6,23 +6,23 @@ use db::{Db, fill_ptr};
 use crate::is_null;
 
 struct InsertCtx<'a> {
-  tp_id: usize,
+  tp_id: u32,
   tp: &'a mut TablePage,
   pks: Vec<&'a ColInfo>,
   pk_set: HashSet<u64>,
 }
 
 impl InsertCtx<'_> {
-  unsafe fn build<'a>(db: &mut Db, table: &str) -> Result<InsertCtx<'a>> {
+  unsafe fn build<'a, 'b>(db: &mut Db, table: &'b str) -> Result<'b, InsertCtx<'a>> {
     let (tp_id, tp) = db.get_tp(table)?;
     let pks = tp.cols().iter().filter(|ci| ci.flags.contains(ColFlags::PRIMARY)).collect::<Vec<_>>();
     let pk_set: HashSet<_> = if pks.len() > 1 {
-      db.record_iter((tp_id, tp)).map(|(data, _)| Self::hash_pks(data.as_ptr(), &pks)).collect()
+      db.record_iter(tp).map(|(data, _)| Self::hash_pks(data.as_ptr(), &pks)).collect()
     } else { HashSet::new() }; // no need to collect
     Ok(InsertCtx { tp, tp_id, pks, pk_set })
   }
 
-  unsafe fn work(i: &Insert, db: &mut Db) -> Result<()> {
+  unsafe fn work<'a>(i: &Insert<'a>, db: &mut Db) -> Result<'a, ()> {
     let mut ctx = InsertCtx::build(db, i.table)?;
     let slot_size = ctx.tp.size as usize;
     let buf = Align4U8::new(slot_size);
@@ -34,7 +34,7 @@ impl InsertCtx<'_> {
       let rid = db.allocate_data_slot(ctx.tp_id); // the `used` bit is set here, and `count` grows here
       let (page, slot) = (rid.page(), rid.slot());
       debug_assert!(slot < ctx.tp.cap as u32);
-      let dp = db.get_page::<DataPage>(page as usize);
+      let dp = db.get_page::<DataPage>(page);
       dp.data.as_mut_ptr().add(slot as usize * slot_size).copy_from_nonoverlapping(buf.ptr, slot_size);
       // update index
       for i in 0..vals.len() {
@@ -43,7 +43,7 @@ impl InsertCtx<'_> {
           let ptr = buf.ptr.add(col.off as usize);
           macro_rules! handle {
             ($ty: ident) => {{
-              let mut index = Index::<{ $ty }>::new(db, Rid::new(ctx.tp_id as u32, i as u32));
+              let mut index = Index::<{ $ty }>::new(db, Rid::new(ctx.tp_id, i as u32));
               index.insert(ptr, rid);
             }};
           }
@@ -54,7 +54,7 @@ impl InsertCtx<'_> {
     Ok(())
   }
 
-  unsafe fn fill_buf(&self, buf: *mut u8, vals: &Vec<Lit>) -> Result<()> {
+  unsafe fn fill_buf<'a>(&self, buf: *mut u8, vals: &Vec<Lit<'a>>) -> Result<'a, ()> {
     let tp = &*self.tp;
     if vals.len() != tp.col_num as usize { return Err(InsertLenMismatch { expect: tp.col_num, actual: vals.len() }); }
     buf.write_bytes(0, (vals.len() + 31) / 32); // clear null-bitset
@@ -71,7 +71,7 @@ impl InsertCtx<'_> {
     Ok(())
   }
 
-  unsafe fn insert_ck(&mut self, data: *const u8, vals: &Vec<Lit>, db: &mut Db) -> Result<()> {
+  unsafe fn insert_ck<'a>(&mut self, data: *const u8, vals: &Vec<Lit<'a>>, db: &mut Db) -> Result<'a, ()> {
     debug_assert_eq!(vals.len(), self.tp.col_num as usize); // fill_buf guarantees this
     'out: for i in 0..vals.len() {
       // below are unique / foreign / `check` check, null item doesn't need them (null check is in `fill_buf`)
@@ -82,9 +82,9 @@ impl InsertCtx<'_> {
           debug_assert_ne!(ci.index, !0);
           macro_rules! handle {
             ($ty: ident) => {{
-              let index = Index::<{ $ty }>::new(db, Rid::new(self.tp_id as u32, i as u32));
+              let index = Index::<{ $ty }>::new(db, Rid::new(self.tp_id, i as u32));
               if index.contains(ptr) {
-                return Err(InsertDupOnUniqueKey { col: ci.name().into(), val: vals.get_unchecked(i).to_owned() });
+                return Err(InsertDupOnUniqueKey { col: ci.name(), val: *vals.get_unchecked(i) });
               }
             }};
           }
@@ -94,14 +94,14 @@ impl InsertCtx<'_> {
           let dp = db.get_page::<DbPage>(0);
           debug_assert!(ci.foreign_table < dp.table_num);
           let f_table_page = db.get_page::<DbPage>(0).tables.get_unchecked(ci.foreign_table as usize).meta;
-          let f_tp = db.get_page::<TablePage>(f_table_page as usize);
+          let f_tp = db.get_page::<TablePage>(f_table_page);
           debug_assert!(ci.foreign_col < f_tp.col_num);
           debug_assert!(f_tp.cols.get_unchecked(ci.foreign_col as usize).index != !0);
           macro_rules! handle {
             ($ty: ident) => {{
               let index = Index::<{ $ty }>::new(db, Rid::new(f_table_page, ci.foreign_col as u32));
               if !index.contains(ptr) {
-                return Err(InsertNoExistOnForeignKey { col: ci.name().into(), val: vals.get_unchecked(i).to_owned() });
+                return Err(InsertNoExistOnForeignKey { col: ci.name(), val: vals.get_unchecked(i).to_owned() });
               }
             }};
           }
@@ -109,7 +109,7 @@ impl InsertCtx<'_> {
           handle_all!(ci.ty.ty, handle);
         }
         if ci.check != !0 {
-          let cp = db.get_page::<CheckPage>(ci.check as usize);
+          let cp = db.get_page::<CheckPage>(ci.check);
           let sz = ci.ty.size() as usize;
           let mut off = 0;
           macro_rules! handle {
@@ -125,7 +125,7 @@ impl InsertCtx<'_> {
             off += sz;
           }
           // the `continue` in macro can prevent it
-          return Err(InsertNotInCheck { col: ci.name().into(), val: vals.get_unchecked(i).to_owned() });
+          return Err(InsertNotInCheck { col: ci.name(), val: vals.get_unchecked(i).to_owned() });
         }
       }
     }
@@ -156,4 +156,4 @@ impl InsertCtx<'_> {
   }
 }
 
-pub fn insert(i: &Insert, db: &mut Db) -> Result<()> { unsafe { InsertCtx::work(i, db) } }
+pub fn insert<'a>(i: &Insert<'a>, db: &mut Db) -> Result<'a, ()> { unsafe { InsertCtx::work(i, db) } }

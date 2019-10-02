@@ -5,13 +5,13 @@ pub trait Ptr2Ref {
   unsafe fn r<'a>(self) -> &'a mut Self::Target;
 }
 
-pub trait Ref2PtrMut {
+pub trait Ref2PtrMut where Self: Sized {
   type Target;
   fn p(self) -> *mut Self::Target;
 
+  unsafe fn idx(self, arr: &[Self::Target]) -> u32 { (self.p()).offset_from(arr.as_ptr()) as u32 }
   // pr for p().r()
   unsafe fn pr<'a>(self) -> &'a mut Self::Target where Self: std::marker::Sized { self.p().r() }
-
   // prc for const version of pr
   unsafe fn prc<'a>(self) -> &'a Self::Target where Self: std::marker::Sized { &*self.p().r() }
 }
@@ -59,5 +59,7 @@ impl Drop for Align4U8 {
 }
 
 pub unsafe fn bsget(p: *const u32, idx: usize) -> bool { ((*p.add(idx / 32) >> (idx % 32)) & 1) != 0 }
+
 pub unsafe fn bsset(p: *mut u32, idx: usize) { *p.add(idx / 32) |= 1 << (idx % 32); }
+
 pub unsafe fn bsdel(p: *mut u32, idx: usize) { *p.add(idx / 32) &= !(1 << (idx % 32)); }

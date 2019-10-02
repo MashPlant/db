@@ -1,43 +1,43 @@
-use crate::{MAGIC_LEN, ColTy, BareTy, LitTy, OwnedLit, AggOp};
+use crate::{MAGIC_LEN, ColTy, BareTy, LitTy, Lit, AggOp};
 
 #[derive(Debug)]
-pub struct ParserError {
+pub struct ParserError<'a> {
   pub line: u32,
   pub col: u32,
-  pub kind: ParserErrorKind,
+  pub kind: ParserErrorKind<'a>,
 }
 
 #[derive(Debug)]
-pub enum ParserErrorKind {
+pub enum ParserErrorKind<'a> {
   SyntaxError,
   UnrecognizedChar(char),
-  TypeSizeTooLarge(Box<str>),
-  InvalidInt(Box<str>),
-  InvalidFloat(Box<str>),
+  TypeSizeTooLarge(&'a str),
+  InvalidInt(&'a str),
+  InvalidFloat(&'a str),
 }
 
 #[derive(Debug)]
-pub enum Error {
-  ParserErrors(Box<[ParserError]>),
+pub enum Error<'a> {
+  ParserErrors(Box<[ParserError<'a>]>),
   InvalidSize(usize),
   InvalidMagic([u8; MAGIC_LEN]),
   NoDbInUse,
   TableExhausted,
   ColTooMany(usize),
   ColSizeTooBig(usize),
-  TableNameTooLong(Box<str>),
-  ColNameTooLong(Box<str>),
-  DupTable(Box<str>),
-  DupCol(Box<str>),
-  ForeignKeyOnNonUnique(Box<str>),
-  DupIndex(Box<str>),
-  DropIndexOnUnique(Box<str>),
-  NoSuchTable(Box<str>),
-  NoSuchCol(Box<str>),
-  NoSuchIndex(Box<str>),
+  TableNameTooLong(&'a str),
+  ColNameTooLong(&'a str),
+  DupTable(&'a str),
+  DupCol(&'a str),
+  ForeignKeyOnNonUnique(&'a str),
+  DupIndex(&'a str),
+  DropIndexOnUnique(&'a str),
+  NoSuchTable(&'a str),
+  NoSuchCol(&'a str),
+  NoSuchIndex(&'a str),
   // there is no UpdateTableWithForeignLink, it will be rejected by UpdateWithIndex
-  DropTableWithForeignLink(Box<str>),
-  DeleteTableWithForeignLink(Box<str>),
+  DropTableWithForeignLink(&'a str),
+  DeleteTableWithForeignLink(&'a str),
   InvalidLike(regex::Error),
   InvalidLikeTy(BareTy),
   IncompatibleForeignTy { foreign: ColTy, own: ColTy },
@@ -47,31 +47,33 @@ pub enum Error {
   // these 2 can be used in both insert and update, so call them put
   PutStrTooLong { limit: u8, actual: usize },
   PutNullOnNotNull,
-  InsertDupOnUniqueKey { col: Box<str>, val: OwnedLit },
-  InsertNoExistOnForeignKey { col: Box<str>, val: OwnedLit },
+  InsertDupOnUniqueKey { col: &'a str, val: Lit<'a> },
+  InsertNoExistOnForeignKey { col: &'a str, val: Lit<'a> },
   InsertDupCompositePrimaryKey,
-  InsertNotInCheck { col: Box<str>, val: OwnedLit },
-  InvalidDate { date: Box<str>, reason: chrono::ParseError },
+  InsertNotInCheck { col: &'a str, val: Lit<'a> },
+  InvalidDate { date: &'a str, reason: chrono::ParseError },
   // below 2 not supported
-  UpdateWithIndex(Box<str>),
-  UpdateWithCheck(Box<str>),
-  AmbiguousCol(Box<str>),
-  DupPrimary(Box<str>),
-  DupForeign(Box<str>),
-  DupCheck(Box<str>),
-  CheckNull(Box<str>),
-  CheckTooLong(Box<str>, usize),
+  UpdateWithIndex(&'a str),
+  UpdateWithCheck(&'a str),
+  AmbiguousCol(&'a str),
+  DupPrimary(&'a str),
+  DupForeign(&'a str),
+  DupCheck(&'a str),
+  CheckNull(&'a str),
+  CheckTooLong(&'a str, usize),
   InvalidAgg { col: ColTy, op: AggOp },
+  // select agg col together with non-agg col
+  MixedSelect,
   CSV(csv::Error),
   IO(std::io::Error),
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<'a, T> = std::result::Result<T, Error<'a>>;
 
-impl From<std::io::Error> for Error {
+impl From<std::io::Error> for Error<'_> {
   fn from(e: std::io::Error) -> Self { Error::IO(e) }
 }
 
-impl From<csv::Error> for Error {
+impl From<csv::Error> for Error<'_> {
   fn from(e: csv::Error) -> Self { Error::CSV(e) }
 }

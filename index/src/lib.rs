@@ -27,9 +27,9 @@ pub struct Index<const T: BareTy> {
 
 impl<const T: BareTy> Index<{ T }> {
   pub unsafe fn new(db: &mut Db, col: Rid) -> Index<{ T }> {
-    let tp = db.get_page::<TablePage>(col.page() as usize);
+    let tp = db.get_page::<TablePage>(col.page());
     let root = tp.cols.get_unchecked_mut(col.slot() as usize).index;
-    let rid_off = db.get_page::<IndexPage>(root as usize).rid_off;
+    let rid_off = db.get_page::<IndexPage>(root).rid_off;
     Index { db: NonNull::new_unchecked(db), root, col, rid_off, _p: PhantomData }
   }
 
@@ -37,9 +37,9 @@ impl<const T: BareTy> Index<{ T }> {
 
   pub unsafe fn insert(&mut self, data: *const u8, rid: Rid) {
     let data_rid = self.make_data_rid(data, rid);
-    if let Some((overflow, split_page)) = self.do_insert(self.root as usize, data_rid.ptr) {
+    if let Some((overflow, split_page)) = self.do_insert(self.root, data_rid.ptr) {
       let (new_id, new_ip) = self.db().alloc_page::<IndexPage>();
-      let old = self.db().get_page::<IndexPage>(self.root as usize);
+      let old = self.db().get_page::<IndexPage>(self.root);
       (new_ip.next = !0, new_ip.count = 2, new_ip.leaf = false, new_ip.rid_off = old.rid_off);
       new_ip.cap = MAX_INDEX_BYTES as u16 / new_ip.slot_size();
       let p = new_ip.data.as_mut_ptr();
@@ -48,13 +48,13 @@ impl<const T: BareTy> Index<{ T }> {
       *(p.add(key_size) as *mut u32) = self.root; // child0
       p.add(slot_size).copy_from_nonoverlapping(overflow.as_ptr(), key_size); // data_rid1
       *(p.add(slot_size + key_size) as *mut u32) = split_page; // child1
-      self.make_root(new_id as u32);
+      self.make_root(new_id);
     }
   }
 
   // return Some((ptr to the first data_rid in new page, new page id)) if overflow happens
   // using NonNull is to optimize Option's space
-  unsafe fn do_insert(&mut self, page: usize, x: *const u8) -> Option<(NonNull<u8>, u32)> {
+  unsafe fn do_insert(&mut self, page: u32, x: *const u8) -> Option<(NonNull<u8>, u32)> {
     let ip = self.db().get_page::<IndexPage>(page);
     self.debug_check(page, ip);
     let (slot_size, key_size) = (ip.slot_size() as usize, ip.key_size() as usize);
@@ -76,7 +76,7 @@ impl<const T: BareTy> Index<{ T }> {
       let pos = if ub == 0 && Cmp::<{ T }>::cmp_full(x, at!(0), self.rid_off as usize) == Ordering::Less {
         (at!(0).copy_from_nonoverlapping(x, key_size), 0).1 // update min key
       } else { ub - 1 }; // insert before ub
-      if let Some((overflow, split_page)) = self.do_insert(at_ch!(pos) as usize, x) {
+      if let Some((overflow, split_page)) = self.do_insert(at_ch!(pos), x) {
         let lb = lower_bound::<{ T }>(ip, overflow.as_ptr());
         insert!(lb, overflow.as_ptr());
         at_ch!(lb) = split_page;
@@ -84,20 +84,20 @@ impl<const T: BareTy> Index<{ T }> {
     }
     if ip.count == ip.cap {
       let (sp_id, sp_ip) = self.db().alloc_page::<IndexPage>();
-      (sp_ip.next = ip.next, ip.next = sp_id as u32);
+      (sp_ip.next = ip.next, ip.next = sp_id);
       // split ceiling half to new page, which keeps the mid key
       (sp_ip.count = ip.count - ip.count / 2, ip.count /= 2);
       (sp_ip.leaf = ip.leaf, sp_ip.rid_off = ip.rid_off, sp_ip.cap = ip.cap);
       sp_ip.data.as_mut_ptr().copy_from_nonoverlapping(at!(ip.count as usize), sp_ip.count as usize * slot_size);
-      Some((NonNull::new_unchecked(sp_ip.data.as_mut_ptr()), sp_id as u32))
+      Some((NonNull::new_unchecked(sp_ip.data.as_mut_ptr()), sp_id))
     } else { None }
   }
 
   pub unsafe fn delete(&mut self, data: *const u8, rid: Rid) {
-    self.do_delete(self.root as usize, self.make_data_rid(data, rid).ptr);
+    self.do_delete(self.root, self.make_data_rid(data, rid).ptr);
   }
 
-  unsafe fn do_delete(&mut self, page: usize, x: *const u8) -> (*const u8, bool) {
+  unsafe fn do_delete(&mut self, page: u32, x: *const u8) -> (*const u8, bool) {
     let ip = self.db().get_page::<IndexPage>(page);
     self.debug_check(page, ip);
     let (slot_size, key_size) = (ip.slot_size() as usize, ip.key_size() as usize);
@@ -115,16 +115,16 @@ impl<const T: BareTy> Index<{ T }> {
       remove!(lb);
     } else {
       let pos = upper_bound::<{ T }>(ip, x).max(1) - 1;
-      let (new_min, need_merge) = self.do_delete(at_ch!(pos) as usize, x);
+      let (new_min, need_merge) = self.do_delete(at_ch!(pos), x);
       at!(pos).copy_from_nonoverlapping(new_min, key_size); // update dup key
       if need_merge {
         if ip.count == 1 {
-          debug_assert!(page == self.root as usize); // only root can have so few slots
+          debug_assert!(page == self.root); // only root can have so few slots
           self.db().dealloc_page(page);
           self.make_root(at_ch!(0));
         } else {
           let l = if pos + 1 < ip.count as usize { pos } else { pos - 1 };
-          let (lid, rid) = (at_ch!(l) as usize, at_ch!(l + 1) as usize);
+          let (lid, rid) = (at_ch!(l), at_ch!(l + 1));
           let (lp, rp) = (self.db().get_page::<IndexPage>(lid), self.db().get_page::<IndexPage>(rid));
           debug_assert_ne!(lid, rid);
           debug_assert_eq!(lp.cap, rp.cap); // but they mey not be equal to ip.cap
@@ -161,7 +161,7 @@ impl<const T: BareTy> Index<{ T }> {
 
   unsafe fn make_root(&mut self, new_id: u32) {
     self.root = new_id;
-    let tp = self.db().get_page::<TablePage>(self.col.page() as usize);
+    let tp = self.db().get_page::<TablePage>(self.col.page());
     tp.cols.get_unchecked_mut(self.col.slot() as usize).index = new_id;
   }
 
@@ -172,10 +172,10 @@ impl<const T: BareTy> Index<{ T }> {
     data_rid
   }
 
-  fn debug_check(&self, page: usize, ip: &IndexPage) {
+  fn debug_check(&self, page: u32, ip: &IndexPage) {
     debug_assert_eq!(ip.cap, MAX_INDEX_BYTES as u16 / ip.slot_size());
     debug_assert!(ip.count < ip.cap); // cannot have count == cap, the code depends on it
-    debug_assert!(page == self.root as usize || ip.cap / 2 <= ip.count);
+    debug_assert!(page == self.root || ip.cap / 2 <= ip.count);
     debug_assert!(ip.leaf || ip.next == !0);
     debug_assert_eq!(ip.rid_off, self.rid_off);
   }

@@ -11,15 +11,15 @@ impl Rid {
   pub fn new(page: u32, slot: u32) -> Rid {
     debug_assert!(page < (MAX_PAGE as u32));
     debug_assert!(slot < (MAX_SLOT as u32));
-    Rid((page << (LOG_MAX_SLOT as u32)) | slot)
+    Rid((page << LOG_MAX_SLOT) | slot)
   }
 
-  pub fn page(self) -> u32 { self.0 >> (LOG_MAX_SLOT as u32) }
+  pub fn page(self) -> u32 { self.0 >> LOG_MAX_SLOT }
   pub fn slot(self) -> u32 { self.0 & ((MAX_SLOT as u32) - 1) }
   pub fn set_page(&mut self, page: u32) -> &mut Self {
     debug_assert!(page < (MAX_PAGE as u32));
     self.0 &= (MAX_SLOT as u32) - 1;
-    self.0 |= page << (LOG_MAX_SLOT as u32);
+    self.0 |= page << LOG_MAX_SLOT;
     self
   }
   pub fn set_slot(&mut self, slot: u32) -> &mut Self {

@@ -35,8 +35,6 @@ impl ColTy {
 #[derive(Copy, Clone)]
 pub enum Lit<'a> { Null, Int(i32), Bool(bool), Float(f32), Str(&'a str) }
 
-pub enum OwnedLit { Null, Int(i32), Bool(bool), Float(f32), Str(Box<str>) }
-
 // add f64 and date, these 2 cannot be produced by parser
 // LitExt is to pass result of `select`
 #[derive(Copy, Clone, PartialOrd, PartialEq)]
@@ -52,19 +50,9 @@ impl Lit<'_> {
     use Lit::*;
     match self { Null => LitTy::Null, Int(_) => LitTy::Int, Bool(_) => LitTy::Bool, Float(_) => LitTy::Float, Str(_) => LitTy::Str, }
   }
-
-  pub fn to_owned(&self) -> OwnedLit {
-    use Lit::*;
-    match *self { Null => OwnedLit::Null, Int(v) => OwnedLit::Int(v), Bool(v) => OwnedLit::Bool(v), Float(v) => OwnedLit::Float(v), Str(v) => OwnedLit::Str(v.into()), }
-  }
-
-  pub fn from_owned(o: &OwnedLit) -> Lit {
-    use OwnedLit::*;
-    match *o { Null => Lit::Null, Int(v) => Lit::Int(v), Bool(v) => Lit::Bool(v), Float(v) => Lit::Float(v), Str(ref v) => Lit::Str(v), }
-  }
 }
 
-// these 2 trais must be implemented manually because Lit contains f32
+// these 2 traits must be implemented manually because Lit contains f32
 // it is okay to implement them, because NaN can never appear in LitExt
 impl Eq for LitExt<'_> {}
 
@@ -88,10 +76,6 @@ impl fmt::Debug for Lit<'_> {
   }
 }
 
-impl fmt::Debug for OwnedLit {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{:?}", Lit::from_owned(self)) }
-}
-
 // some tiny modifications comparing to Lit, because this is output to a csv file
 impl fmt::Debug for LitExt<'_> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -105,13 +89,14 @@ impl fmt::Debug for LitExt<'_> {
 }
 
 // Agg, Sum is available for Int, Bool, Float
-// None, Min, Max, Count is available for all
+// Min, Max, Count is available for all
+// CountAll is special, it comes from count(*), so it doesn't have ColRef
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
-pub enum AggOp { None, Avg, Sum, Min, Max, Count }
+pub enum AggOp { Avg, Sum, Min, Max, Count, CountAll }
 
 impl AggOp {
-  pub fn name(self) -> Option<&'static str> {
+  pub fn name(self) -> &'static str {
     use AggOp::*;
-    match self { None => Option::None, Avg => Some("avg"), Sum => Some("sum"), Min => Some("min"), Max => Some("max"), Count => Some("count") }
+    match self { Avg => "avg", Sum => "sum", Min => "min", Max => "max", Count | CountAll => "count" }
   }
 }

@@ -2,7 +2,7 @@ use chrono::NaiveDate;
 use unchecked_unwrap::UncheckedUnwrap;
 use csv::Writer;
 
-use common::{*, BareTy::*, Error::*};
+use common::{*, BareTy::*, Error::*, AggOp::*};
 use syntax::ast::*;
 use physics::*;
 use db::Db;
@@ -10,24 +10,27 @@ use crate::{predicate::{and, one_predicate, cross_predicate}, filter::filter, is
 
 #[derive(Copy, Clone)]
 pub struct Col {
-  pub op: AggOp,
+  // if op == Some(CountAll), `idx` is a meaningless value, `ci` is None, or `ci` will always be Some
+  pub op: Option<AggOp>,
   // index of ci in table page, used to access null bit
   pub idx: u32,
-  pub ci: &'static ColInfo,
+  pub ci: Option<&'static ColInfo>,
 }
 
 pub struct SelectResult {
-  pub cols: Vec<Col>,
+  cols: Vec<Col>,
   // `data` is a 2-d array of data cell (Either<...>)
   // its col size = cols.len()
   // since Lit doesn't contain NaiveDate, we need to use an Either here
-  pub data: Vec<LitExt<'static>>,
+  data: Vec<LitExt<'static>>,
 }
 
+// caller col.op != CountAll (<=> col.ci.is_some())
 unsafe fn ptr2lit(data: *const u8, col: &Col) -> LitExt<'static> {
   if is_null(data, col.idx as usize) { return LitExt::Null; };
-  let ptr = data.add(col.ci.off as usize);
-  match col.ci.ty.ty {
+  let ci = col.ci.unchecked_unwrap();
+  let ptr = data.add(ci.off as usize);
+  match ci.ty.ty {
     Int => LitExt::Int(*(ptr as *const i32)),
     Bool => LitExt::Bool(*(ptr as *const bool)),
     Float => LitExt::Float(*(ptr as *const f32)),
@@ -42,55 +45,48 @@ impl SelectResult {
     for row in data {
       debug_assert_eq!(tbls.len(), row.len());
     }
-    // if has agg, only keep one row (at least this is how sqlite behaves)
-    let has_agg = tbls.iter().flatten().any(|col| col.op != AggOp::None);
+    // if has agg, all col should have agg (checked in mk_tbls)
+    let has_agg = tbls.iter().flatten().any(|col| col.op.is_some());
     let data = if has_agg {
-      if data.is_empty() { Vec::new() } else {
-        tbls.iter().enumerate().flat_map(|(idx, tbl)| {
-          tbl.iter().map(move |col| {
-            match col.op {
-              AggOp::None => {
-                // only take the first row
-                ptr2lit(*data.get_unchecked(0).get_unchecked(idx), col)
-              }
-              AggOp::Avg | AggOp::Sum => { // only accept Int, Float, Bool, checked in mk_tbls
-                let mut sum = 0.0; // use f64 for better precision (cover i32)
-                for row in data {
-                  let data = *row.get_unchecked(idx);
-                  if !is_null(data, col.idx as usize) {
-                    let ptr = data.add(col.ci.off as usize);
-                    match col.ci.ty.ty {
-                      Int => sum += *(ptr as *const i32) as f64,
-                      Bool => sum += *(ptr as *const bool) as i8 as f64,
-                      Float => sum += *(ptr as *const f32) as f64,
-                      _ => debug_unreachable!(),
-                    }
+      tbls.iter().enumerate().flat_map(|(idx, tbl)| {
+        tbl.iter().map(move |col| {
+          // avg, sum, min, max, count should ignore null, if none is not null, all except count should return null, count should return 0
+          // avg's denominator should also ignore null
+          // count(*) should not ignore null
+          let op = col.op.unchecked_unwrap();
+          match op {
+            Avg | Sum => { // only accept Int, Float, Bool, checked in mk_tbls
+              let mut sum = 0.0; // use f64 for better precision (cover i32)
+              let mut notnull_cnt = 0;
+              for row in data {
+                let data = *row.get_unchecked(idx);
+                if !is_null(data, col.idx as usize) {
+                  let ci = col.ci.unchecked_unwrap();
+                  let ptr = data.add(ci.off as usize);
+                  match ci.ty.ty {
+                    Int => sum += *(ptr as *const i32) as f64,
+                    Bool => sum += *(ptr as *const bool) as i8 as f64,
+                    Float => sum += *(ptr as *const f32) as f64,
+                    _ => debug_unreachable!(),
                   }
+                  notnull_cnt += 1;
                 }
-                if col.op == AggOp::Avg { sum /= data.len() as f64; }
-                LitExt::F64(sum)
               }
-              AggOp::Min | AggOp::Max => {
-                let it = data.iter().map(|row| {
-                  ptr2lit(*row.get_unchecked(idx), col)
-                });
-                // we don't want to select null as min/max here, so let null be the min in max(), be the max in min()
-                // since Null is the first variant in the enum, "null be the min in max()" is the natural order
-                if col.op == AggOp::Max { it.max() } else {
-                  use std::cmp::Ordering::*;
-                  it.min_by(|l, r| match (l, r) {
-                    (LitExt::Null, LitExt::Null) => Equal,
-                    (LitExt::Null, _) => Greater,
-                    (_, LitExt::Null) => Less,
-                    (l, r) => l.cmp(r)
-                  })
-                }.unchecked_unwrap()
+              if notnull_cnt == 0 { LitExt::Null } else {
+                LitExt::F64(if op == Avg { sum / notnull_cnt as f64 } else { sum })
               }
-              AggOp::Count => LitExt::Int(data.len() as i32)
             }
-          })
-        }).collect()
-      }
+            Min | Max => {
+              let it = data.iter().filter_map(|row| {
+                match ptr2lit(*row.get_unchecked(idx), col) { LitExt::Null => None, lit => Some(lit) }
+              });
+              if op == Max { it.max() } else { it.min() }.unwrap_or(LitExt::Null)
+            }
+            Count => LitExt::Int(data.iter().filter(|row| !is_null(*row.get_unchecked(idx), col.idx as usize)).count() as i32),
+            CountAll => LitExt::Int(data.len() as i32),
+          }
+        })
+      }).collect()
     } else {
       data.iter().flat_map(|row| row.iter().zip(tbls.iter()).flat_map(|(&data, tbl)| {
         tbl.iter().map(move |col| ptr2lit(data, col))
@@ -106,14 +102,18 @@ impl SelectResult {
 
   // actually I don't believe any error can happen when making csv
   // it is just because I am not familiar enough with this lib, or I will definitely use unchecked_unwrap everywhere
-  pub fn to_csv(&self) -> Result<String> {
+  pub fn to_csv<'a>(&self) -> Result<'a, String> {
     unsafe {
       let mut csv = Vec::new();
       let mut wt = Writer::from_writer(&mut csv);
       for &Col { op, ci, .. } in &self.cols {
-        if let Some(op) = op.name() {
-          wt.write_field(format!("{}({})", op, ci.name()))?;
-        } else { wt.write_field(ci.name())?; };
+        if let Some(ci) = ci {
+          let name = ci.name();
+          if let Some(op) = op { wt.write_field(format!("{}({:?})", op.name(), name))?; } else { wt.write_field(name)?; }
+        } else {
+          debug_assert!(op == Some(CountAll));
+          wt.write_field("count(*)")?;
+        }
       }
       wt.write_record(None::<&[u8]>)?;
       for i in 0..self.row_count() {
@@ -127,47 +127,58 @@ impl SelectResult {
 }
 
 struct InsertCtx<'a> {
-  tbls: IndexMap<&'a str, WithId<&'a TablePage>>,
+  tbls: IndexMap<&'a str, (u32, &'a TablePage)>,
   cols: HashMap<&'a str, Option<(&'a TablePage, &'a ColInfo, usize)>>,
 }
 
-unsafe fn one_where<'a>(cr: &ColRef, ctx: &InsertCtx) -> Result<(&'a TablePage, &'a ColInfo, usize)> {
+unsafe fn one_where<'a, 'b>(cr: &ColRef<'b>, ctx: &InsertCtx) -> Result<'b, (&'a TablePage, &'a ColInfo, usize)> {
   if let Some(t) = cr.table {
     if let Some((tbl_idx, _, &tp)) = ctx.tbls.get_full(t) {
-      Ok((tp.1.pr(), tp.1.pr().get_ci(cr.col)?.1, tbl_idx))
-    } else { Err(NoSuchTable(t.into())) }
+      Ok((tp.1.pr(), tp.1.pr().get_ci(cr.col)?, tbl_idx))
+    } else { Err(NoSuchTable(t)) }
   } else {
     match ctx.cols.get(cr.col) {
       Some(&Some((tp, ci, tbl_idx))) => Ok((tp.pr(), ci.pr(), tbl_idx)),
-      Some(None) => Err(AmbiguousCol(cr.col.into())),
-      None => Err(NoSuchCol(cr.col.into())),
+      Some(None) => Err(AmbiguousCol(cr.col)),
+      None => Err(NoSuchCol(cr.col)),
     }
   }
 }
 
 // the validity of AggOp is checked here
-unsafe fn mk_tbls<'a>(ops: &Option<Vec<Agg>>, ctx: &InsertCtx) -> Result<Vec<Vec<Col>>> {
-  if let Some(ops) = &ops {
+unsafe fn mk_tbls<'a>(ops: &Option<Vec<Agg<'a>>>, ctx: &InsertCtx) -> Result<'a, Vec<Vec<Col>>> {
+  if let Some(ops) = ops {
+    if ops.iter().any(|agg| agg.op.is_some()) != ops.iter().all(|agg| agg.op.is_some()) {
+      return Err(MixedSelect);
+    }
     let mut ret = vec![vec![]; ctx.tbls.len()];
     for &Agg { op, col } in ops {
-      let (tp, ci, idx) = one_where(&col, ctx)?;
-      debug_assert!(idx < ret.len());
-      let ty = ci.ty.ty;
-      if (op == AggOp::Avg || op == AggOp::Sum) && ty != Int && ty != Float && ty != Bool {
-        return Err(InvalidAgg { col: ci.ty, op });
+      if op == Some(CountAll) {
+        // I admit it is quite ugly...
+        debug_assert!(0 < ret.len());
+        ret.get_unchecked_mut(0).push(Col { op, idx: 0, ci: None });
+      } else {
+        let (tp, ci, idx) = one_where(&col, ctx)?;
+        debug_assert!(idx < ret.len());
+        let ty = ci.ty.ty;
+        if let Some(op) = op {
+          if (op == Avg || op == Sum) && ty != Int && ty != Float && ty != Bool {
+            return Err(InvalidAgg { col: ci.ty, op });
+          }
+        }
+        let ci_id = ci.idx(&tp.cols);
+        ret.get_unchecked_mut(idx).push(Col { op, idx: ci_id, ci: Some(ci) });
       }
-      let ci_id = (ci as *const ColInfo).offset_from(tp.cols.as_ptr()) as u32;
-      ret.get_unchecked_mut(idx).push(Col { op, idx: ci_id, ci });
     }
     Ok(ret)
   } else { // select *
     Ok(ctx.tbls.iter().map(|(_, &(_, tp))| {
-      tp.cols().iter().enumerate().map(|(idx, ci)| Col { op: AggOp::None, idx: idx as u32, ci }).collect()
+      tp.cols().iter().enumerate().map(|(idx, ci)| Col { op: None, idx: idx as u32, ci: Some(ci) }).collect()
     }).collect())
   }
 }
 
-pub fn select(s: &Select, db: &mut Db) -> Result<SelectResult> {
+pub fn select<'a>(s: &Select<'a>, db: &mut Db) -> Result<'a, SelectResult> {
   unsafe {
     debug_assert!(s.tables.len() >= 1);
     let mut tbls = IndexMap::default();
@@ -175,7 +186,7 @@ pub fn select(s: &Select, db: &mut Db) -> Result<SelectResult> {
     for (idx, &t) in s.tables.iter().enumerate() {
       let (tp_id, tp) = db.get_tp(t)?;
       match tbls.entry(t) {
-        IndexEntry::Occupied(_) => return Err(DupTable(t.into())),
+        IndexEntry::Occupied(_) => return Err(DupTable(t)),
         IndexEntry::Vacant(v) => { v.insert((tp_id, tp.prc())); }
       }
       for ci in tp.cols() {
