@@ -10,26 +10,18 @@ pub struct Eval {
 }
 
 impl Eval {
-  pub fn exec_all(&mut self, code: &str,
-                  input_handler: impl Fn(&Stmt), result_handler: impl Fn(&str), err_handler: impl Fn(Error)) {
-    match syntax::work(code) {
-      Ok(program) => for s in &program {
-        input_handler(s);
-        match self.exec(s) { Ok(res) => result_handler(&res), Err(err) => err_handler(err), }
-      }
-      Err(err) => err_handler(err)
+  pub fn exec_all<'a>(&mut self, code: &'a str, input_handler: impl Fn(&Stmt), result_handler: impl Fn(&str)) -> Result<'a, ()> {
+    for s in &syntax::work(code)? {
+      input_handler(s);
+      result_handler(&self.exec(s)?);
     }
+    Ok(())
   }
 
   pub fn exec_all_repl(&mut self, code: &str) {
-    self.exec_all(code, |x| println!(">> {:?}", x), |x| println!("{}", x), |x| eprintln!("{:?}", x))
-  }
-
-  pub fn exec_all_check(&mut self, code: &str) {
-    self.exec_all(code, |_| {}, |_| {}, |x| {
-      eprintln!("{:?}", x);
-      std::process::exit(1);
-    })
+    if let Err(e) = self.exec_all(code, |x| println!(">> {:?}", x), |x| if !x.is_empty() { println!("{}", x) }) {
+      eprintln!("Error: {:?}", e);
+    }
   }
 
   pub fn exec<'a>(&mut self, sql: &Stmt<'a>) -> Result<'a, Cow<str>> {

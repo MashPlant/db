@@ -109,6 +109,7 @@ impl<'a> Expr<'a> {
 pub enum CmpOp { Lt, Le, Ge, Gt, Eq, Ne }
 
 impl CmpOp {
+  #[cfg_attr(tarpaulin, skip)]
   pub fn name(self) -> &'static str {
     match self { CmpOp::Lt => "<", CmpOp::Le => "<=", CmpOp::Ge => ">=", CmpOp::Gt => ">", CmpOp::Eq => "==", CmpOp::Ne => "!=" }
   }

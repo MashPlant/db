@@ -40,11 +40,11 @@ unsafe fn ptr2lit(data: *const u8, col: &Col) -> LitExt<'static> {
 }
 
 impl SelectResult {
+  // `data` is 2-d array of dimension = tbls.len() * (data.len() / tbls.len())
   // tbls[i] <-> data[i], both belongs to a table
-  unsafe fn new(tbls: &[Vec<Col>], data: &[Vec<*const u8>]) -> SelectResult {
-    for row in data {
-      debug_assert_eq!(tbls.len(), row.len());
-    }
+  unsafe fn new(tbls: &[Vec<Col>], data: &[*const u8]) -> SelectResult {
+    debug_assert_eq!(data.len() % tbls.len(), 0);
+    let result_num = data.len() / tbls.len();
     // if has agg, all col should have agg (checked in mk_tbls)
     let has_agg = tbls.iter().flatten().any(|col| col.op.is_some());
     let data = if has_agg {
@@ -58,8 +58,8 @@ impl SelectResult {
             Avg | Sum => { // only accept Int, Float, Bool, checked in mk_tbls
               let mut sum = 0.0; // use f64 for better precision (cover i32)
               let mut notnull_cnt = 0;
-              for row in data {
-                let data = *row.get_unchecked(idx);
+              for i in 0..result_num {
+                let data = *data.get_unchecked(i * tbls.len() + idx);
                 if !is_null(data, col.idx as usize) {
                   let ci = col.ci.unchecked_unwrap();
                   let ptr = data.add(ci.off as usize);
@@ -77,20 +77,33 @@ impl SelectResult {
               }
             }
             Min | Max => {
-              let it = data.iter().filter_map(|row| {
-                match ptr2lit(*row.get_unchecked(idx), col) { LitExt::Null => None, lit => Some(lit) }
+              let it = (0..result_num).filter_map(|i| {
+                match ptr2lit(*data.get_unchecked(i * tbls.len() + idx), col) { LitExt::Null => None, lit => Some(lit) }
               });
               if op == Max { it.max() } else { it.min() }.unwrap_or(LitExt::Null)
             }
-            Count => LitExt::Int(data.iter().filter(|row| !is_null(*row.get_unchecked(idx), col.idx as usize)).count() as i32),
-            CountAll => LitExt::Int(data.len() as i32),
+            Count => LitExt::Int((0..result_num).filter(|&i| {
+              !is_null(*data.get_unchecked(i * tbls.len() + idx), col.idx as usize)
+            }).count() as i32),
+            CountAll => LitExt::Int(result_num as i32),
           }
         })
       }).collect()
     } else {
-      data.iter().flat_map(|row| row.iter().zip(tbls.iter()).flat_map(|(&data, tbl)| {
-        tbl.iter().map(move |col| ptr2lit(data, col))
-      })).collect()
+      let row = (tbls.iter().map(|tbl| tbl.len())).sum::<usize>();
+      let mut ret = Vec::<LitExt>::with_capacity(result_num * row);
+      ret.set_len(result_num * row);
+      for i in 0..result_num {
+        let mut j = 0;
+        for (idx, tbl) in tbls.iter().enumerate() {
+          let data = *data.get_unchecked(i * tbls.len() + idx);
+          for col in tbl {
+            ret.as_mut_ptr().add(i * row + j).write(ptr2lit(data, col));
+            j += 1;
+          }
+        }
+      }
+      ret
     };
     SelectResult { cols: tbls.iter().flatten().copied().collect(), data }
   }
@@ -109,7 +122,7 @@ impl SelectResult {
       for &Col { op, ci, .. } in &self.cols {
         if let Some(ci) = ci {
           let name = ci.name();
-          if let Some(op) = op { wt.write_field(format!("{}({:?})", op.name(), name))?; } else { wt.write_field(name)?; }
+          if let Some(op) = op { wt.write_field(format!("{}({})", op.name(), name))?; } else { wt.write_field(name)?; }
         } else {
           debug_assert!(op == Some(CountAll));
           wt.write_field("count(*)")?;
@@ -156,7 +169,7 @@ unsafe fn mk_tbls<'a>(ops: &Option<Vec<Agg<'a>>>, ctx: &InsertCtx) -> Result<'a,
       if op == Some(CountAll) {
         // I admit it is quite ugly...
         debug_assert!(0 < ret.len());
-        ret.get_unchecked_mut(0).push(Col { op, idx: 0, ci: None });
+        ret.get_unchecked_mut(0).push(Col { op, idx: !0, ci: None });
       } else {
         let (tp, ci, idx) = one_where(&col, ctx)?;
         debug_assert!(idx < ret.len());
@@ -180,7 +193,8 @@ unsafe fn mk_tbls<'a>(ops: &Option<Vec<Agg<'a>>>, ctx: &InsertCtx) -> Result<'a,
 
 pub fn select<'a>(s: &Select<'a>, db: &mut Db) -> Result<'a, SelectResult> {
   unsafe {
-    debug_assert!(s.tables.len() >= 1);
+    let tbl_num = s.tables.len();
+    debug_assert!(tbl_num >= 1); // parser guarantee this
     let mut tbls = IndexMap::default();
     let mut cols = HashMap::new();
     for (idx, &t) in s.tables.iter().enumerate() {
@@ -195,14 +209,15 @@ pub fn select<'a>(s: &Select<'a>, db: &mut Db) -> Result<'a, SelectResult> {
           .or_insert(Some((tp.prc(), ci, idx)));
       }
     }
-    debug_assert_eq!(tbls.len(), s.tables.len());
+    debug_assert_eq!(tbls.len(), tbl_num);
     let ctx = InsertCtx { tbls, cols };
     let result_tbls = mk_tbls(&s.ops, &ctx)?;
 
-    let mut one_preds = Vec::with_capacity(s.tables.len());
-    let mut one_wheres = vec![vec![]; s.tables.len()];
-    let mut cross_preds = HashMap::new();
-    for _ in 0..s.tables.len() { one_preds.push(vec![]); } // Box<Fn> is not Clone
+    let mut one_preds = Vec::with_capacity(tbl_num);
+    let mut cross_preds = Vec::with_capacity(tbl_num * tbl_num); // 2-d array, dim = tbl_num * tbl_num
+    for _ in 0..tbl_num { one_preds.push(vec![]); } // Box<Fn> is not Clone, so must use loop to push
+    for _ in 0..tbl_num * tbl_num { cross_preds.push(vec![]); }
+    let mut one_wheres = vec![vec![]; tbl_num];
     for e in &s.where_ {
       let (l, r) = (e.lhs_col(), e.rhs_col());
       let (tp_l, ci_l, tbl_idx_l) = one_where(l, &ctx)?;
@@ -213,53 +228,50 @@ pub fn select<'a>(s: &Select<'a>, db: &mut Db) -> Result<'a, SelectResult> {
         } else { None }
       } { // not in one table
         if let &Expr::Cmp(op, _, _) = e {
-          cross_preds.entry((tbl_idx_l as u32, tbl_idx_r as u32)).or_insert_with(Vec::new)
-            .push(cross_predicate(op, (ci_l, ci_r), (tp_l, tp_r))?);
+          cross_preds[tbl_idx_l * tbl_num + tbl_idx_r].push(cross_predicate(op, (ci_l, ci_r), (tp_l, tp_r))?);
         } else { debug_unreachable!() } // if expr have rhs col, it must have cmp op
       } else { // in one table
         one_preds.get_unchecked_mut(tbl_idx_l).push(one_predicate(e, tp_l)?);
         one_wheres.get_unchecked_mut(tbl_idx_l).push(e);
       }
     }
-    let cross_preds = cross_preds.into_iter().map(|(k, v)| (k, and(v)))
-      .collect::<HashMap<_, _>>();
-
-    let mut one_results = ctx.tbls.values().zip(one_preds.into_iter())
-      .zip(one_wheres.iter()).enumerate()
-      .map(|(idx, ((&tp, pred), where_))| {
+    let cross_preds = cross_preds.into_iter().map(|p| and(p)).collect::<Vec<_>>();
+    let one_results = ctx.tbls.values().zip(one_preds.into_iter()).zip(one_wheres.iter())
+      .map(|((&tp, pred), where_)| {
         let mut data = Vec::new();
-        filter(where_, tp, db, and(pred), |data1, _| data.push(data1 as *const u8));
-        (idx, data)
+        filter(where_, tp, db, and(pred), |x, _| data.push(x as *const u8));
+        data
       }).collect::<Vec<_>>();
-    one_results.sort_unstable_by_key(|x| x.1.len());
-    let mut one_results = one_results.into_iter();
-    let (mut tbl_idx_l, res_l) = one_results.next().unchecked_unwrap(); // there are at least 1 table
-    let mut res_l = res_l.into_iter().map(|x| vec![x]).collect::<Vec<_>>();
-    for (tbl_idx_r, res_r) in one_results {
-      let old_res_l = std::mem::replace(&mut res_l, Vec::new());
-      res_l.reserve(old_res_l.len() * res_r.len());
-      if let Some(pred) = cross_preds.get(&(tbl_idx_l as u32, tbl_idx_r as u32)) {
-        for l in old_res_l {
-          for &r in &res_r {
-            let data_l = *l.last().unchecked_unwrap();
-            if pred((data_l, r)) {
-              let mut tmp = l.clone();
-              tmp.push(r);
-              res_l.push(tmp);
-            }
-          }
-        }
-      } else {
-        for l in old_res_l {
-          for &r in &res_r {
-            let mut tmp = l.clone();
-            tmp.push(r);
-            res_l.push(tmp);
+
+    let res0 = one_results.get_unchecked(0);
+    let mut final_ = Vec::<*const u8>::with_capacity(res0.len() * tbl_num);
+    final_.set_len(res0.len() * tbl_num);
+    for (i, &x) in res0.iter().enumerate() {
+      final_.as_mut_ptr().add(i * tbl_num).write(x);
+    }
+
+    for r_idx in 1..one_results.len() {
+      let rs = one_results.get_unchecked(r_idx);
+      let mut new_final_ = Vec::<*const u8>::new();
+      for old_idx in 0..(final_.len() / tbl_num) {
+        let old_row = final_.as_ptr().add(old_idx * tbl_num);
+        for &r in rs {
+          let ok = (0..r_idx).all(|l_idx| {
+            let l = *old_row.add(l_idx);
+            cross_preds.get_unchecked(l_idx * tbl_num + r_idx)((l, r)) &&
+              cross_preds.get_unchecked(r_idx * tbl_num + l_idx)((r, l))
+          });
+          if ok {
+            let old_len = new_final_.len();
+            new_final_.reserve(tbl_num);
+            new_final_.set_len(old_len + tbl_num);
+            new_final_.as_mut_ptr().add(old_len).copy_from_nonoverlapping(old_row, tbl_num);
+            *new_final_.get_unchecked_mut(old_len + r_idx) = r;
           }
         }
       }
-      tbl_idx_l = tbl_idx_r;
+      final_ = new_final_;
     }
-    Ok(SelectResult::new(&result_tbls, &res_l))
+    Ok(SelectResult::new(&result_tbls, &final_))
   }
 }

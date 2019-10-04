@@ -90,6 +90,7 @@ priority = []
 '(\d+)|(-\d+)' = 'IntLit'
 "'[^'\\\\]*(\\\\.[^'\\\\]*)*'" = 'StrLit'
 '[A-Za-z][_0-9A-Za-z]*' = 'Id'
+'.' = '_Err'
 "##)]
 impl<'p> Parser<'p> {
   #[rule(Program ->)]
@@ -121,12 +122,12 @@ impl<'p> Parser<'p> {
   fn stmt_show_tables(_: Token, _: Token) -> Stmt<'p> { Stmt::ShowTables }
   #[rule(Stmt -> Desc Id)]
   fn stmt_show_table(_: Token, t: Token) -> Stmt<'p> { Stmt::ShowTable(t.str()) }
-  #[rule(Stmt -> Select Mul From IdList Where WhereList)]
-  fn stmt_select0(_: Token, _: Token, _: Token, tables: Vec<&'p str>, _: Token, where_: Vec<Expr<'p>>) -> Stmt<'p> {
+  #[rule(Stmt -> Select Mul From IdList WhereM)]
+  fn stmt_select0(_: Token, _: Token, _: Token, tables: Vec<&'p str>, where_: Vec<Expr<'p>>) -> Stmt<'p> {
     Stmt::Select(Select { ops: None, tables, where_ })
   }
-  #[rule(Stmt -> Select AggList From IdList Where WhereList)]
-  fn stmt_select1(_: Token, ops: Vec<Agg<'p>>, _: Token, tables: Vec<&'p str>, _: Token, where_: Vec<Expr<'p>>) -> Stmt<'p> {
+  #[rule(Stmt -> Select AggList From IdList WhereM)]
+  fn stmt_select1(_: Token, ops: Vec<Agg<'p>>, _: Token, tables: Vec<&'p str>, where_: Vec<Expr<'p>>) -> Stmt<'p> {
     Stmt::Select(Select { ops: Some(ops), tables, where_ })
   }
   #[rule(Stmt -> Insert Into Id Values LitListList)]
@@ -137,10 +138,15 @@ impl<'p> Parser<'p> {
   fn stmt_update(_: Token, t: Token, _: Token, sets: Vec<(&'p str, Lit<'p>)>, where_: Vec<Expr<'p>>) -> Stmt<'p> {
     Stmt::Update(Update { table: t.str(), sets, where_ })
   }
-  #[rule(Stmt -> Delete From Id WhereList)]
+  #[rule(Stmt -> Delete From Id WhereM)]
   fn stmt_delete(_: Token, _: Token, t: Token, where_: Vec<Expr<'p>>) -> Stmt<'p> {
     Stmt::Delete(Delete { table: t.str(), where_ })
   }
+
+  #[rule(WhereM -> Where WhereList)]
+  fn where_m1(_: Token, where_: Vec<Expr<'p>>) -> Vec<Expr<'p>> { where_ }
+  #[rule(WhereM ->)]
+  fn where_m0() -> Vec<Expr<'p>> { vec![] }
 
   #[rule(ConsListM ->)]
   fn cons_list_m0() -> Vec<TableCons<'p>> { vec![] }
@@ -215,7 +221,7 @@ impl<'p> Parser<'p> {
   #[rule(Agg -> Sum LParen ColRef RParen)]
   fn agg_sum(_: Token, _: Token, col: ColRef<'p>, _: Token) -> Agg<'p> { Agg { col, op: Some(AggOp::Sum) } }
   #[rule(Agg -> Min LParen ColRef RParen)]
-  fn agg_min(_: Token, _: Token, col: ColRef<'p>, _: Token) -> Agg<'p> { Agg { col, op:Some( AggOp::Min) } }
+  fn agg_min(_: Token, _: Token, col: ColRef<'p>, _: Token) -> Agg<'p> { Agg { col, op: Some(AggOp::Min) } }
   #[rule(Agg -> Max LParen ColRef RParen)]
   fn agg_max(_: Token, _: Token, col: ColRef<'p>, _: Token) -> Agg<'p> { Agg { col, op: Some(AggOp::Max) } }
   #[rule(Agg -> Count LParen ColRef RParen)]
@@ -254,7 +260,7 @@ impl<'p> Parser<'p> {
   #[rule(Expr -> ColRef Is NotNull)]
   fn expr_is_not_null(c: ColRef<'p>, _: Token, _: Token) -> Expr<'p> { Expr::Null(c, false) }
   #[rule(Expr -> ColRef Like StrLit)]
-  fn expr_like(c: ColRef<'p>, _: Token, s: Token) -> Expr<'p> { Expr::Like(c, s.str()) }
+  fn expr_like(c: ColRef<'p>, _: Token, s: Token) -> Expr<'p> { Expr::Like(c, s.str_trim()) }
 
   #[rule(Atom -> ColRef)]
   fn atom_col_ref(c: ColRef<'p>) -> Atom<'p> { Atom::ColRef(c) }

@@ -1,4 +1,6 @@
 use driver::Eval;
+use physics::*;
+use common::{*, BareTy::*};
 
 const CREATE: &str = include_str!("../sql/create.sql");
 const DROP: &str = include_str!("../sql/drop.sql");
@@ -9,12 +11,10 @@ const PRICE: &str = include_str!("../sql/price.sql");
 const ORDERS: &str = include_str!("../sql/orders.sql");
 
 #[test]
-fn test() {
-  use physics::*;
-  use common::{*, BareTy::*};
-
+#[ignore]
+fn create() {
   let mut e = Eval::default();
-  e.exec_all_check(CREATE);
+  e.exec_all(CREATE, |_| {}, |_| {}).unwrap();
   unsafe {
     let db = e.db.as_mut().unwrap();
     let dp = db.get_page::<DbPage>(0);
@@ -67,11 +67,58 @@ fn test() {
     }
   }
 
-  e.exec_all_check(CUSTOMER);
-  e.exec_all_check(BOOK);
-  e.exec_all_check(WEBSITE);
-  e.exec_all_check(PRICE);
-  e.exec_all_check(ORDERS);
+  e.exec_all(CUSTOMER, |_| {}, |_| {}).unwrap();
+  e.exec_all(BOOK, |_| {}, |_| {}).unwrap();
+  e.exec_all(WEBSITE, |_| {}, |_| {}).unwrap();
+  e.exec_all(PRICE, |_| {}, |_| {}).unwrap();
+  e.exec_all(ORDERS, |_| {}, |_| {}).unwrap();
+}
 
-//  exec_all(DROP, None);
+#[test]
+#[ignore]
+fn select() {
+  let mut e = Eval::default();
+  e.exec_all("use orderDB;", |_| {}, |_| {}).unwrap();
+  e.exec_all("select * from orders;", |_| {}, |_| {}).unwrap();
+  e.exec_all("select * from orders where id is not null;", |_| {}, |_| {}).unwrap();
+  e.exec_all("select * from orders where date0 > '2017-09-26';", |_| {}, |_| {}).unwrap();
+  let _ = e.exec_all("drop index orders (customer_id);", |_| {}, |_| {}); // maybe fail because index doesn't exist yet, but doesn't matter
+  e.exec_all("select * from orders where customer_id=306967;", |_| {}, |_| {}).unwrap();
+  e.exec_all("create index orders (customer_id);", |_| {}, |_| {}).unwrap();
+  e.exec_all("select * from orders where customer_id=306967;", |_| {}, |_| {}).unwrap();
+  e.exec_all("select * from customer where name like 'chad ca_ello';", |_| {}, |_| {}).unwrap();
+  e.exec_all("select * from customer where name like 'fausto vanno%';", |_| {}, |_| {}).unwrap();
+  assert!(e.exec_all("select website_id, avg(price) from price;", |_| {}, |_| {}).is_err());
+  e.exec_all("select avg(price), min(price), max(price), count(price), count(*) from price where price>=60;", |_| {}, |_| {}).unwrap();
+  e.exec_all("select *
+from orders, customer, website
+where website.id=orders.website_id and customer.id=orders.customer_id and orders.quantity > 5;", |_| {}, |_| {}).unwrap();
+}
+
+#[test]
+#[ignore]
+fn errors() {
+  let mut e = Eval::default();
+  assert!(e.exec_all("^", |_| {}, |_| {}).is_err());
+  assert!(e.exec_all(";", |_| {}, |_| {}).is_err());
+  assert!(e.exec_all("use OrderDB; -- typo", |_| {}, |_| {}).is_err());
+  e.exec_all("use orderDB;", |_| {}, |_| {}).unwrap();
+  assert!(e.exec_all("CREATE TABLE customer( -- duplicate
+    id INT(10) NOT NULL
+);", |_| {}, |_| {}).is_err());
+  assert!(e.exec_all("CREATE TABLE t(
+    id INT(256) NOT NULL -- u8 overflow
+);", |_| {}, |_| {}).is_err());
+  e.exec_all("CREATE TABLE t(
+    id INT(255) NOT NULL
+);", |_| {}, |_| {}).unwrap();
+  assert!(e.exec_all("insert into t values (2147483648); -- i32 overflow", |_| {}, |_| {}).is_err());
+}
+
+#[test]
+fn integrate() {
+  create();
+  errors();
+  select();
+  Eval::default().exec_all(DROP, |_| {}, |_| {}).unwrap();
 }
