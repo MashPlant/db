@@ -1,7 +1,7 @@
 #![allow(incomplete_features)]
 #![feature(const_generics)]
 
-use std::{ptr::NonNull, marker::PhantomData, cmp::Ordering};
+use std::{ptr::{self, NonNull}, marker::PhantomData, cmp::Ordering};
 
 use common::*;
 use db::Db;
@@ -35,6 +35,7 @@ impl<const T: BareTy> Index<{ T }> {
 
   unsafe fn db<'a>(&mut self) -> &'a mut Db { self.db.as_ptr().r() }
 
+  // caller guarantee data_rid doesn't exist in tree
   pub unsafe fn insert(&mut self, data: *const u8, rid: Rid) {
     let data_rid = self.make_data_rid(data, rid);
     if let Some((overflow, split_page)) = self.do_insert(self.root, data_rid.ptr) {
@@ -55,8 +56,8 @@ impl<const T: BareTy> Index<{ T }> {
   // return Some((ptr to the first data_rid in new page, new page id)) if overflow happens
   // using NonNull is to optimize Option's space
   unsafe fn do_insert(&mut self, page: u32, x: *const u8) -> Option<(NonNull<u8>, u32)> {
+    self.debug_check(page);
     let ip = self.db().get_page::<IndexPage>(page);
-    self.debug_check(page, ip);
     let (slot_size, key_size) = (ip.slot_size() as usize, ip.key_size() as usize);
     macro_rules! at { ($pos: expr) => { ip.data.as_mut_ptr().add($pos * slot_size) }; }
     macro_rules! at_ch { ($pos: expr) => { *(ip.data.as_mut_ptr().add($pos * slot_size + key_size) as *mut u32) }; }
@@ -68,18 +69,16 @@ impl<const T: BareTy> Index<{ T }> {
       };
     }
     if ip.leaf {
-      let lb = lower_bound::<{ T }>(ip, x);
-      debug_assert_ne!(Cmp::<{ T }>::cmp_full(x, at!(lb), self.rid_off as usize), Ordering::Equal);
-      insert!(lb, x);
+      insert!(upper_bound::<{ T }>(ip, x), x);
     } else {
       let ub = upper_bound::<{ T }>(ip, x);
-      let pos = if ub == 0 && Cmp::<{ T }>::cmp_full(x, at!(0), self.rid_off as usize) == Ordering::Less {
+      let pos = if ub == 0 {
         (at!(0).copy_from_nonoverlapping(x, key_size), 0).1 // update min key
-      } else { ub - 1 }; // insert before ub
+      } else { ub - 1 }; // insert before `lb`
       if let Some((overflow, split_page)) = self.do_insert(at_ch!(pos), x) {
-        let lb = lower_bound::<{ T }>(ip, overflow.as_ptr());
-        insert!(lb, overflow.as_ptr());
-        at_ch!(lb) = split_page;
+        // `split_page` comes from the mid of the splitted child (`at_ch!(pos)`), it can only be at `at_ch!(pos + 1)`
+        insert!(pos + 1, overflow.as_ptr());
+        at_ch!(pos + 1) = split_page;
       }
     }
     if ip.count == ip.cap {
@@ -93,26 +92,28 @@ impl<const T: BareTy> Index<{ T }> {
     } else { None }
   }
 
+  // caller guarantee data_rid exists in tree
   pub unsafe fn delete(&mut self, data: *const u8, rid: Rid) {
     self.do_delete(self.root, self.make_data_rid(data, rid).ptr);
   }
 
+  // return (pointer to the min key in page, does page need merge (count < cap / 2))
   unsafe fn do_delete(&mut self, page: u32, x: *const u8) -> (*const u8, bool) {
+    self.debug_check(page);
     let ip = self.db().get_page::<IndexPage>(page);
-    self.debug_check(page, ip);
     let (slot_size, key_size) = (ip.slot_size() as usize, ip.key_size() as usize);
     macro_rules! at { ($pos: expr) => { ip.data.as_mut_ptr().add($pos * slot_size) }; }
     macro_rules! at_ch { ($pos: expr) => { *(ip.data.as_mut_ptr().add($pos * slot_size + key_size) as *mut u32) }; }
     macro_rules! remove {
       ($pos: expr) => {
         ip.count -= 1;
-        at!($pos).copy_from(at!($pos + 1), (ip.count as usize - $pos - 1) * slot_size);
+        at!($pos).copy_from(at!($pos + 1), (ip.count as usize - $pos) * slot_size);
       };
     }
     if ip.leaf {
-      let lb = lower_bound::<{ T }>(ip, x);
-      debug_assert_eq!(Cmp::<{ T }>::cmp_full(x, at!(lb), self.rid_off as usize), Ordering::Equal);
-      remove!(lb);
+      let pos = upper_bound::<{ T }>(ip, x) - 1;
+      debug_assert_eq!(Cmp::<{ T }>::cmp_full(x, at!(pos), self.rid_off as usize), Ordering::Equal);
+      remove!(pos);
     } else {
       let pos = upper_bound::<{ T }>(ip, x).max(1) - 1;
       let (new_min, need_merge) = self.do_delete(at_ch!(pos), x);
@@ -128,14 +129,12 @@ impl<const T: BareTy> Index<{ T }> {
           let (lp, rp) = (self.db().get_page::<IndexPage>(lid), self.db().get_page::<IndexPage>(rid));
           debug_assert_ne!(lid, rid);
           debug_assert_eq!(lp.cap, rp.cap); // but they mey not be equal to ip.cap
-          if lp.count + rp.count < lp.cap { // do merge
+          debug_assert_eq!(lp.slot_size(), rp.slot_size()); // but they mey not be equal to ip.slot_size()
+          let slot_size = lp.slot_size() as usize; // `key_size` is the same as `ip`'s
+          if lp.count + rp.count < lp.cap { // do merge, merge r to l
             debug_assert!(lp.count + rp.count >= lp.cap / 2);
-            if rp.next == 0 {
-              lp.next = rp.next;
-            }
             lp.next = rp.next;
-            lp.data.as_mut_ptr().add(lp.count as usize * slot_size)
-              .copy_from_nonoverlapping(rp.data.as_ptr(), rp.count as usize * slot_size);
+            lp.data.as_mut_ptr().add(lp.count as usize * slot_size).copy_from_nonoverlapping(rp.data.as_ptr(), rp.count as usize * slot_size);
             lp.count += rp.count;
             remove!(l + 1); // r is overwritten
             self.db().dealloc_page(rid);
@@ -172,12 +171,50 @@ impl<const T: BareTy> Index<{ T }> {
     data_rid
   }
 
-  fn debug_check(&self, page: u32, ip: &IndexPage) {
-    debug_assert_eq!(ip.cap, MAX_INDEX_BYTES as u16 / ip.slot_size());
-    debug_assert!(ip.count < ip.cap); // cannot have count == cap, the code depends on it
-    debug_assert!(page == self.root || ip.cap / 2 <= ip.count);
-    debug_assert!(ip.leaf || ip.next == !0);
-    debug_assert_eq!(ip.rid_off, self.rid_off);
+  unsafe fn debug_check(&self, page: u32) {
+    if cfg!(debug_assertions) { // ensure compiler can optimize this out
+      let ip = self.pr().db().get_page::<IndexPage>(page);
+      let slot_size = ip.slot_size() as usize;
+      macro_rules! at { ($pos: expr) => { ip.data.as_mut_ptr().add($pos * slot_size) }; }
+      // previously the relationship between `cap` and `slot_size` is checked here (in the commented line)
+      // but it is now removed because we want to modify the `cap` in tests without modifying `slot_size`
+      // assert_eq!(ip.cap, MAX_INDEX_BYTES as u16 / ip.slot_size());
+      assert!(ip.count < ip.cap); // cannot have count == cap, the code depends on it
+      assert!(page == self.root || ip.cap / 2 <= ip.count);
+      assert_eq!(ip.rid_off, self.rid_off);
+      for i in 1..ip.count as usize {
+        assert_eq!(Cmp::<{ T }>::cmp_full(at!(i - 1), at!(i), self.rid_off as usize), Ordering::Less);
+      }
+    }
+  }
+
+  pub unsafe fn debug_check_all(&self) {
+    if cfg!(debug_assertions) {
+      let tp = self.pr().db().get_page::<TablePage>(self.col.page());
+      assert_eq!(tp.cols[self.col.slot() as usize].index, self.root);
+      self.dfs(self.root, ptr::null(), ptr::null());
+    }
+  }
+
+  unsafe fn dfs(&self, page: u32, lb: *const u8, ub: *const u8) {
+    self.debug_check(page);
+    let ip = self.pr().db().get_page::<IndexPage>(page);
+    let (slot_size, key_size) = (ip.slot_size() as usize, ip.key_size() as usize);
+    macro_rules! at { ($pos: expr) => { ip.data.as_mut_ptr().add($pos * slot_size) }; }
+    macro_rules! at_ch { ($pos: expr) => { *(ip.data.as_mut_ptr().add($pos * slot_size + key_size) as *mut u32) }; }
+    if !lb.is_null() {
+      // the min key must be the dup key
+      assert_eq!(Cmp::<{ T }>::cmp_full(lb, at!(0), self.rid_off as usize), Ordering::Equal);
+    }
+    if !ub.is_null() {
+      assert_eq!(Cmp::<{ T }>::cmp_full(at!(ip.count as usize - 1), ub, self.rid_off as usize), Ordering::Less);
+    }
+    if !ip.leaf {
+      for i in 0..ip.count as usize {
+        let ub = if i + 1 == ip.count as usize { ub } else { at!(i + 1) };
+        self.dfs(at_ch!(i), at!(i), ub);
+      }
+    }
   }
 }
 
@@ -187,7 +224,7 @@ pub(crate) mod macros {
   #[macro_export]
   macro_rules! handle_all {
     ($ty: expr, $handle: ident) => {
-      match $ty { Int => $handle!(Int), Bool => $handle!(Bool), Float => $handle!(Float), Char => $handle!(Char), VarChar => $handle!(VarChar), Date => $handle!(Date) }
+      match $ty { Int => $handle!(Int), Bool => $handle!(Bool), Float => $handle!(Float), VarChar => $handle!(VarChar), Date => $handle!(Date) }
     };
   }
 }

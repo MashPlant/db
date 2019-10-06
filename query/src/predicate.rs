@@ -23,9 +23,9 @@ pub unsafe fn one_predicate<'a>(e: &Expr<'a>, tp: &TablePage) -> Result<'a, Box<
   let l = tp.get_ci(e.lhs_col().col)?;
   let l_id = l.idx(&tp.cols) as usize;
   let l_off = l.off as usize;
-  match e {
+  match *e {
     Expr::Cmp(op, _, r) => match r {
-      &Atom::Lit(r) => {
+      Atom::Lit(r) => {
         macro_rules! cmp {
           ($op: tt, $p: ident, $l: expr, $r: expr) => { Ok(Box::new(move |$p| !is_null($p, l_id) && $l $op $r)) };
         }
@@ -38,7 +38,7 @@ pub unsafe fn one_predicate<'a>(e: &Expr<'a>, tp: &TablePage) -> Result<'a, Box<
           // convert int to float for comparison, below (occurs twice) are the same
           (Int, Lit::Float(v)) => handle_op!(cmp, op, p, *(p.add(l_off) as *const i32) as f32, v),
           (Float, Lit::Int(v)) => handle_op!(cmp, op, p, *(p.add(l_off) as *const f32), v as f32),
-          (Char, Lit::Str(v)) | (VarChar, Lit::Str(v)) => {
+          (VarChar, Lit::Str(v)) => {
             let v = Box::<str>::from(v);
             handle_op!(cmp, op, p, str_from_parts(p.add(l_off + 1), *p.add(l_off) as usize), v.as_ref())
           }
@@ -62,24 +62,21 @@ pub unsafe fn one_predicate<'a>(e: &Expr<'a>, tp: &TablePage) -> Result<'a, Box<
           (Float, Float) => handle_op!(cmp, op, p, *(p.add(l_off) as *const f32), *(p.add(r_off) as *const f32)),
           (Int, Float) => handle_op!(cmp, op, p, *(p.add(l_off) as *const i32) as f32, *(p.add(r_off) as *const f32)),
           (Float, Int) => handle_op!(cmp, op, p, *(p.add(l_off) as *const f32), *(p.add(r_off) as *const i32) as f32),
-          (Char, Char) | (Char, VarChar) | (VarChar, Char) | (VarChar, VarChar) =>
-            handle_op!(cmp, op, p, str_from_parts(p.add(l_off + 1), *p.add(l_off) as usize),
-                str_from_parts(p.add(r_off + 1), *p.add(r_off) as usize)),
+          (VarChar, VarChar) => handle_op!(cmp, op, p, str_from_parts(p.add(l_off + 1), *p.add(l_off) as usize), str_from_parts(p.add(r_off + 1), *p.add(r_off) as usize)),
           (Date, Date) => handle_op!(cmp, op, p, *(p.add(l_off) as *const NaiveDate), *(p.add(r_off) as *const NaiveDate)),
           (expect, actual) => return Err(RecordTyMismatch { expect, actual })
         }
       }
     },
-    Expr::Null(_, null) =>
-      Ok(if *null { Box::new(move |p| is_null(p, l_id)) } else { Box::new(move |p| !is_null(p, l_id)) }),
-    Expr::Like(_, pat) => {
-      match l.ty.ty { Char | VarChar => {} ty => return Err(InvalidLikeTy(ty)) }
-      let pat = regex::escape(pat).replace('%', ".*").replace('_', ".");
-      match regex::Regex::new(&pat) {
+    Expr::Null(_, null) => Ok(if null { Box::new(move |p| is_null(p, l_id)) } else { Box::new(move |p| !is_null(p, l_id)) }),
+    Expr::Like(_, like) => {
+      if l.ty.ty != VarChar { return Err(InvalidLikeTy(l.ty.ty)); }
+      let re = regex::escape(like).replace('%', ".*").replace('_', ".");
+      match regex::Regex::new(&re) {
         Ok(re) => Ok(Box::new(move |p|
           !is_null(p, l_id) && re.is_match(str_from_parts(p.add(l_off + 1), *p.add(l_off) as usize))
         )),
-        Err(err) => Err(InvalidLike(err)),
+        Err(reason) => Err(InvalidLike { like, reason }),
       }
     }
   }
@@ -98,9 +95,7 @@ pub unsafe fn cross_predicate<'a>(op: CmpOp, col: (&ColInfo, &ColInfo), tp: (&Ta
     (Float, Float) => handle_op!(cmp, op, p, *(p.0.add(l_off) as *const f32), *(p.1.add(r_off) as *const f32)),
     (Int, Float) => handle_op!(cmp, op, p, *(p.0.add(l_off) as *const i32) as f32, *(p.1.add(r_off) as *const f32)),
     (Float, Int) => handle_op!(cmp, op, p, *(p.0.add(l_off) as *const f32), *(p.1.add(r_off) as *const i32) as f32),
-    (Char, Char) | (Char, VarChar) | (VarChar, Char) | (VarChar, VarChar) =>
-      handle_op!(cmp, op, p, str_from_parts(p.0.add(l_off + 1), *p.0.add(l_off) as usize),
-                str_from_parts(p.1.add(r_off + 1), *p.1.add(r_off) as usize)),
+    (VarChar, VarChar) => handle_op!(cmp, op, p, str_from_parts(p.0.add(l_off + 1), *p.0.add(l_off) as usize), str_from_parts(p.1.add(r_off + 1), *p.1.add(r_off) as usize)),
     (Date, Date) => handle_op!(cmp, op, p, *(p.0.add(l_off) as *const NaiveDate), *(p.1.add(r_off) as *const NaiveDate)),
     (expect, actual) => return Err(RecordTyMismatch { expect, actual })
   }

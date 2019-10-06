@@ -64,7 +64,6 @@ priority = []
 '(i|I)(s|S)' = 'Is'
 '(i|I)(n|N)(t|T)' = 'Int'
 '(b|B)(o|O)(o|O)(l|L)' = 'Bool'
-'(c|C)(h|H)(a|A)(r|R)' = 'Char'
 '(v|V)(a|A)(r|R)(c|C)(h|H)(a|A)(r|R)' = 'VarChar'
 '(f|F)(l|L)(o|O)(a|A)(t|T)' = 'Float'
 '(d|D)(a|A)(t|T)(e|E)' = 'Date'
@@ -111,9 +110,9 @@ impl<'p> Parser<'p> {
   #[rule(Stmt -> Drop Table Id)]
   fn stmt_drop_table(_: Token, _: Token, t: Token) -> Stmt<'p> { Stmt::DropTable(t.str()) }
   #[rule(Stmt -> Create Index Id LParen Id RParen)]
-  fn stmt_create_index(_: Token, _: Token, t: Token, _: Token, c: Token, _: Token) -> Stmt<'p> { Stmt::CreateIndex(t.str(), c.str()) }
+  fn stmt_create_index(_: Token, _: Token, t: Token, _: Token, c: Token, _: Token) -> Stmt<'p> { Stmt::CreateIndex { table: t.str(), col: c.str() } }
   #[rule(Stmt -> Drop Index Id LParen Id RParen)]
-  fn stmt_drop_index(_: Token, _: Token, t: Token, _: Token, c: Token, _: Token) -> Stmt<'p> { Stmt::DropIndex(t.str(), c.str()) }
+  fn stmt_drop_index(_: Token, _: Token, t: Token, _: Token, c: Token, _: Token) -> Stmt<'p> { Stmt::DropIndex { table: t.str(), col: c.str() } }
   #[rule(Stmt -> Create Table Id LParen ColDeclList ConsListM RParen)]
   fn stmt_create_table(_: Token, _: Token, t: Token, _: Token, cols: Vec<ColDecl<'p>>, cons: Vec<TableCons<'p>>, _: Token) -> Stmt<'p> {
     Stmt::CreateTable(CreateTable { name: t.str(), cols, cons })
@@ -209,8 +208,8 @@ impl<'p> Parser<'p> {
   fn cons_primary(_: Token, _: Token, il: Vec<&'p str>, _: Token) -> Vec<TableCons<'p>> {
     il.into_iter().map(|name| TableCons { name, kind: TableConsKind::Primary }).collect()
   }
-  #[rule(Cons -> Check LParen Id In LParen LitList RParen RParen)]
-  fn cons_check(_: Token, _: Token, t: Token, _: Token, _: Token, ll: Vec<Lit<'p>>, _: Token, _: Token) -> Vec<TableCons<'p>> {
+  #[rule(Cons -> Check LParen Id RParen In LParen LitList RParen)]
+  fn cons_check(_: Token, _: Token, t: Token, _: Token, _: Token, _: Token, ll: Vec<Lit<'p>>, _: Token) -> Vec<TableCons<'p>> {
     vec![TableCons { name: t.str(), kind: TableConsKind::Check(ll) }]
   }
 
@@ -292,8 +291,6 @@ impl<'p> Parser<'p> {
   fn bare_ty_bool(_: Token) -> BareTy { Bool }
   #[rule(BareTy -> Float)]
   fn bare_ty_float(_: Token) -> BareTy { Float }
-  #[rule(BareTy -> Char)]
-  fn bare_ty_char(_: Token) -> BareTy { Char }
   #[rule(BareTy -> VarChar)]
   fn bare_ty_var_char(_: Token) -> BareTy { VarChar }
   #[rule(BareTy -> Date)]

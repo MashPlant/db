@@ -4,7 +4,7 @@ use common::{MAX_PAGE, MAX_SLOT, LOG_MAX_SLOT};
 // (32 - LOG_MAX_SLOT) bits for page, LOG_MAX_SLOT bits for slot
 // enough to locate both a record in DataPage and a col_info in TablePage
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-#[repr(C)]
+#[repr(transparent)]
 pub struct Rid(u32);
 
 impl Rid {
@@ -16,18 +16,6 @@ impl Rid {
 
   pub fn page(self) -> u32 { self.0 >> LOG_MAX_SLOT }
   pub fn slot(self) -> u32 { self.0 & ((MAX_SLOT as u32) - 1) }
-  pub fn set_page(&mut self, page: u32) -> &mut Self {
-    debug_assert!(page < (MAX_PAGE as u32));
-    self.0 &= (MAX_SLOT as u32) - 1;
-    self.0 |= page << LOG_MAX_SLOT;
-    self
-  }
-  pub fn set_slot(&mut self, slot: u32) -> &mut Self {
-    debug_assert!(slot < (MAX_SLOT as u32));
-    self.0 &= !((MAX_SLOT as u32) - 1);
-    self.0 |= slot;
-    self
-  }
 }
 
 impl fmt::Debug for Rid {

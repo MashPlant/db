@@ -20,7 +20,7 @@ pub unsafe fn fill_ptr(ptr: *mut u8, col: ColTy, val: Lit) -> Result<()> {
     (Float, Lit::Float(v)) => (ptr as *mut f32).write(v),
     (Int, Lit::Float(v)) => (ptr as *mut i32).write(v as i32),
     (Float, Lit::Int(v)) => (ptr as *mut f32).write(v as f32),
-    (Char, Lit::Str(v)) | (VarChar, Lit::Str(v)) => {
+    (VarChar, Lit::Str(v)) => {
       let size = col.size;
       if v.len() > size as usize { return Err(PutStrTooLong { limit: size, actual: v.len() }); }
       ptr.write(v.len() as u8);

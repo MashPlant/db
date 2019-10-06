@@ -10,11 +10,15 @@ const WEBSITE: &str = include_str!("../sql/website.sql");
 const PRICE: &str = include_str!("../sql/price.sql");
 const ORDERS: &str = include_str!("../sql/orders.sql");
 
+// format! input stmts to cover related code
+macro_rules! ok { ($e: expr, $sql: expr) => { $e.exec_all($sql, |x| { let _ = format!("{:?}", x); }, |_| {}).unwrap(); }; }
+macro_rules! err { ($e: expr, $sql: expr) => { $e.exec_all($sql, |x| { let _ = format!("{:?}", x); }, |_| {}).unwrap_err(); }; }
+
 #[test]
 #[ignore]
 fn create() {
   let mut e = Eval::default();
-  e.exec_all(CREATE, |_| {}, |_| {}).unwrap();
+  ok!(e, CREATE);
   unsafe {
     let db = e.db.as_mut().unwrap();
     let dp = db.get_page::<DbPage>(0);
@@ -66,59 +70,76 @@ fn create() {
       assert_eq!(c.name(), "price");
     }
   }
-
-  e.exec_all(CUSTOMER, |_| {}, |_| {}).unwrap();
-  e.exec_all(BOOK, |_| {}, |_| {}).unwrap();
-  e.exec_all(WEBSITE, |_| {}, |_| {}).unwrap();
-  e.exec_all(PRICE, |_| {}, |_| {}).unwrap();
-  e.exec_all(ORDERS, |_| {}, |_| {}).unwrap();
+  ok!(e, CUSTOMER);
+  ok!(e, BOOK);
+  ok!(e, WEBSITE);
+  ok!(e, PRICE);
+  ok!(e, ORDERS);
 }
 
 #[test]
 #[ignore]
 fn select() {
   let mut e = Eval::default();
-  e.exec_all("use orderDB;", |_| {}, |_| {}).unwrap();
-  e.exec_all("select * from orders;", |_| {}, |_| {}).unwrap();
-  e.exec_all("select * from orders where id is not null;", |_| {}, |_| {}).unwrap();
-  e.exec_all("select * from orders where date0 > '2017-09-26';", |_| {}, |_| {}).unwrap();
-  let _ = e.exec_all("drop index orders (customer_id);", |_| {}, |_| {}); // maybe fail because index doesn't exist yet, but doesn't matter
-  e.exec_all("select * from orders where customer_id=306967;", |_| {}, |_| {}).unwrap();
-  e.exec_all("create index orders (customer_id);", |_| {}, |_| {}).unwrap();
-  e.exec_all("select * from orders where customer_id=306967;", |_| {}, |_| {}).unwrap();
-  e.exec_all("select * from customer where name like 'chad ca_ello';", |_| {}, |_| {}).unwrap();
-  e.exec_all("select * from customer where name like 'fausto vanno%';", |_| {}, |_| {}).unwrap();
+  ok!(e, "use orderDB;");
+  ok!(e, "select * from orders;");
+  ok!(e, "select * from orders where id is not null;");
+  ok!(e, "select * from orders where date0 > '2017-09-26';");
+  let _ = e.exec_all("drop index orders (customer_id);", |_| {}, |_| {});
+  // maybe fail because index doesn't exist yet, but doesn't matter
+  ok!(e, "select * from orders where customer_id=306967;");
+  ok!(e, "create index orders (customer_id);");
+  ok!(e, "select * from orders where customer_id=306967;");
+  ok!(e, "select * from customer where name like 'chad ca_ello';");
+  ok!(e, "select * from customer where name like 'fausto vanno%';");
   assert!(e.exec_all("select website_id, avg(price) from price;", |_| {}, |_| {}).is_err());
-  e.exec_all("select avg(price), min(price), max(price), count(price), count(*) from price where price>=60;", |_| {}, |_| {}).unwrap();
-  e.exec_all("select *
+  ok!(e, "select avg(price), min(price), max(price), count(price), count(*) from price where price>=60;");
+  ok!(e, "select *
 from orders, customer, website
-where website.id=orders.website_id and customer.id=orders.customer_id and orders.quantity > 5;", |_| {}, |_| {}).unwrap();
+where website.id=orders.website_id and customer.id=orders.customer_id and orders.quantity > 5;");
 }
 
 #[test]
 #[ignore]
 fn errors() {
   let mut e = Eval::default();
-  assert!(e.exec_all("^", |_| {}, |_| {}).is_err());
-  assert!(e.exec_all(";", |_| {}, |_| {}).is_err());
-  assert!(e.exec_all("use OrderDB; -- typo", |_| {}, |_| {}).is_err());
-  e.exec_all("use orderDB;", |_| {}, |_| {}).unwrap();
-  assert!(e.exec_all("CREATE TABLE customer( -- duplicate
-    id INT(10) NOT NULL
-);", |_| {}, |_| {}).is_err());
-  assert!(e.exec_all("CREATE TABLE t(
-    id INT(256) NOT NULL -- u8 overflow
-);", |_| {}, |_| {}).is_err());
-  e.exec_all("CREATE TABLE t(
-    id INT(255) NOT NULL
-);", |_| {}, |_| {}).unwrap();
-  assert!(e.exec_all("insert into t values (2147483648); -- i32 overflow", |_| {}, |_| {}).is_err());
+  err!(e, "^");
+  err!(e, ";");
+  err!(e, "SHOW DATABASE OrderDB; -- typo");
+  err!(e, "use OrderDB; -- typo");
+  ok!(e, "use orderDB; -- ok");
+  err!(e, "CREATE TABLE t (id INT, id INT); -- duplicate -- duplicate");
+  err!(e, "CREATE TABLE customer(id INT(10) NOT NULL); -- duplicate");
+  err!(e, "CREATE TABLE t (id INT(256) NOT NULL); -- u8 overflow");
+  ok!(e, "CREATE TABLE t (id INT(255) NOT NULL); -- ok");
+  err!(e, "insert into t value (2147483648); -- i32 overflow");
+  err!(e, "CREATE TABLE t1 (id INT(255), CHECK (id) IN ('F', 'M')); -- invalid check");
+  ok!(e, "CREATE TABLE t1 (id DATE, CHECK (id) IN ('2019-01-01')); -- ok");
+}
+
+#[test]
+#[ignore]
+fn insert() {
+  let mut e = Eval::default();
+  ok!(e, "use orderDB; -- ok");
+  err!(e, "insert into orders values (1,1001,300001,200001,'2014-09-31',5); -- illegal date");
+  err!(e, "insert into orders values (1,1000,300001,200001,'2014-09-30',5); -- no such website");
+  err!(e, "insert into orders values (1,1001,3000000,200001,'2014-09-30',5); -- no such customer");
+  ok!(e, "insert into orders values (1,1001,300001,200001,'2014-09-30',5); -- ok");
+  err!(e, "insert into orders values (1,1001,300001,200001,'2014-09-30',5); -- duplicate id");
+  err!(e, "insert into customer values (1, 'name', 'x'); -- not in check list");
+  ok!(e, "delete from orders where id = 1; -- ok, remove the previously inserted value");
+  err!(e, "insert into price values (1002,249932,9999); -- dup composite primary key");
+  ok!(e, "insert into price values (1003,249932,9999); -- ok");
+  ok!(e, "delete from price where price = 9999; -- ok, remove the previously inserted value");
 }
 
 #[test]
 fn integrate() {
+  crate::index::test_index();
   create();
   errors();
   select();
+  insert();
   Eval::default().exec_all(DROP, |_| {}, |_| {}).unwrap();
 }

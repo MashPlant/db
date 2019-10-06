@@ -52,32 +52,33 @@ impl<const T: BareTy> Index<{ T }> {
   pub unsafe fn lower_bound(&mut self, data: *const u8) -> IndexIter {
     // rid = 00..00, which is the smallest
     let data_rid = self.make_data_rid(data, mem::transmute(0));
-    let (page, slot) = self.do_lower_bound(data_rid.ptr);
+    let (page, slot) = self.do_upper_bound(data_rid.ptr);
     IndexIter { db: self.db(), page, slot, rid_off: self.rid_off }
   }
 
   pub unsafe fn upper_bound(&mut self, data: *const u8) -> IndexIter {
     // rid = 11..11, which is the biggest
     let data_rid = self.make_data_rid(data, mem::transmute(!0));
-    let (page, slot) = self.do_lower_bound(data_rid.ptr);
+    let (page, slot) = self.do_upper_bound(data_rid.ptr);
     IndexIter { db: self.db(), page, slot, rid_off: self.rid_off }
   }
 
-  pub unsafe fn contains(&self, x: *const u8) -> bool {
-    self.pr().lower_bound(x) != self.pr().upper_bound(x)
+  pub unsafe fn contains(&self, data: *const u8) -> bool {
+    self.pr().lower_bound(data) != self.pr().upper_bound(data)
   }
 
-  unsafe fn do_lower_bound(&mut self, x: *const u8) -> (u32, u16) {
+  // data_rid's rid is either 0 or !0, there cannot be any existing data_rid that is equal to it (in the sense of `cmp_full`)
+  unsafe fn do_upper_bound(&mut self, data_rid: *const u8) -> (u32, u16) {
     let mut page = self.root;
     loop {
+      self.debug_check(page);
       let ip = self.db().get_page::<IndexPage>(page);
-      self.debug_check(page, ip);
       let (slot_size, key_size) = (ip.slot_size() as usize, ip.key_size() as usize);
       macro_rules! at_ch { ($pos: expr) => { *(ip.data.as_mut_ptr().add($pos * slot_size + key_size) as *mut u32) }; }
       if ip.leaf {
-        break (page, cmp::lower_bound::<{ T }>(ip, x) as u16);
+        break (page, cmp::upper_bound::<{ T }>(ip, data_rid) as u16);
       }
-      let pos = cmp::upper_bound::<{ T }>(ip, x).max(1) - 1;
+      let pos = cmp::upper_bound::<{ T }>(ip, data_rid).max(1) - 1;
       page = at_ch!(pos);
     }
   }

@@ -52,47 +52,46 @@ impl Db {
 
       // validate table
       if dp.table_num == MAX_TABLE as u8 { return Err(TableExhausted); }
-      if c.name.len()  >= MAX_TABLE_NAME { return Err(TableNameTooLong(c.name)); }
+      if c.name.len() >= MAX_TABLE_NAME { return Err(TableNameTooLong(c.name)); }
 
       if dp.names().find(|&name| name == c.name).is_some() { return Err(DupTable(c.name)); }
       if c.cols.len() >= MAX_COL { return Err(ColTooMany(c.cols.len())); }
       let mut cols = IndexSet::default();
       for co in &c.cols {
-        if cols.contains(co.name) { return Err(DupCol(co.name)); }
-        if co.name.len()  >= MAX_COL_NAME { return Err(ColNameTooLong(co.name)); }
-        cols.insert(co.name);
+        if !cols.insert(co.name) { return Err(DupCol(co.name)); }
+        if co.name.len() >= MAX_COL_NAME { return Err(ColNameTooLong(co.name)); }
       }
 
       // validate col cons
       let mut primary_cnt = 0;
-      // only allow one one primary / foreign / check for one col
-      let mut has_pfc = vec![(false, false, false); c.cons.len()];
+      let mut has_pfc = vec![(false, false, false); cols.len()]; // only allow one primary / foreign / check for one col
 
       for cons in &c.cons {
         if let Some((idx, _)) = cols.get_full(cons.name) {
+          debug_assert!(idx < has_pfc.len());
+          let has_pfc = has_pfc.get_unchecked_mut(idx);
           match &cons.kind {
             TableConsKind::Primary => {
-              if has_pfc[idx].0 { return Err(DupPrimary(cons.name)); }
-              has_pfc[idx].0 = true;
+              if has_pfc.0 { return Err(DupPrimary(cons.name)); }
+              has_pfc.0 = true;
               primary_cnt += 1;
             }
             &TableConsKind::Foreign { table, col } => {
-              if has_pfc[idx].1 { return Err(DupForeign(cons.name)); }
-              has_pfc[idx].1 = true;
+              if has_pfc.1 { return Err(DupForeign(cons.name)); }
+              has_pfc.1 = true;
               let ci = self.get_tp(table)?.1.get_ci(col)?;
               if !ci.flags.contains(ColFlags::UNIQUE) { return Err(ForeignKeyOnNonUnique(col)); }
               let (f_ty, ty) = (ci.ty, c.cols[idx].ty);
-              // strict here, don't allow foreign link between two types or shorter string to longer string
-              // (for simplicity of future handling)
+              // maybe too strict here, don't allow foreign link between two types or shorter string to longer string (for simplicity of future handling)
               match (f_ty.ty, ty.ty) {
-                (Char, Char) | (Char, VarChar) | (VarChar, Char) | (VarChar, VarChar) if ty.size >= f_ty.size => {}
+                (VarChar, VarChar) if ty.size >= f_ty.size => {}
                 (Int, Int) | (Bool, Bool) | (Float, Float) | (Date, Date) => {}
                 _ => return Err(IncompatibleForeignTy { foreign: f_ty, own: ty }),
               }
             }
             TableConsKind::Check(check) => {
-              if has_pfc[idx].2 { return Err(DupCheck(cons.name)); }
-              has_pfc[idx].2 = true;
+              if has_pfc.2 { return Err(DupCheck(cons.name)); }
+              has_pfc.2 = true;
               let ty = c.cols[idx].ty;
               let sz = ty.size() as usize;
               if check.len() * sz >= MAX_CHECK_BYTES { return Err(CheckTooLong(cons.name, check.len())); }
@@ -109,13 +108,13 @@ impl Db {
       }
 
       // validate size, the size is calculated in the same way as below
-      let mut size = (c.cols.len() as u16 + 31) / 32 * 4; // null bitset
+      let mut size = (c.cols.len() + 31) / 32 * 4; // null bitset
       for c in &c.cols {
-        size += c.ty.size();
-        if size as usize > MAX_DATA_BYTE { return Err(ColSizeTooBig(size as usize)); }
+        size += c.ty.size() as usize;
+        if size > MAX_DATA_BYTE { return Err(ColSizeTooBig(size)); }
       }
-      size = (size + 3) & !3; // at last it should be aligned to keep the alignment of the next slot
-      if size as usize > MAX_DATA_BYTE { return Err(ColSizeTooBig(size as usize)); }
+      size = (size + 3) & !3; // it should be 4-aligned to keep the alignment of the next slot
+      if size > MAX_DATA_BYTE { return Err(ColSizeTooBig(size)); }
 
       // now no error can occur, can write to db safely
 

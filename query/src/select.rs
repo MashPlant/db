@@ -34,7 +34,7 @@ unsafe fn ptr2lit(data: *const u8, col: &Col) -> LitExt<'static> {
     Int => LitExt::Int(*(ptr as *const i32)),
     Bool => LitExt::Bool(*(ptr as *const bool)),
     Float => LitExt::Float(*(ptr as *const f32)),
-    Char | VarChar => LitExt::Str(str_from_parts(ptr.add(1), *ptr as usize)),
+    VarChar => LitExt::Str(str_from_parts(ptr.add(1), *ptr as usize)),
     Date => LitExt::Date(*(ptr as *const NaiveDate)),
   }
 }
@@ -205,8 +205,7 @@ pub fn select<'a>(s: &Select<'a>, db: &mut Db) -> Result<'a, SelectResult> {
       }
       for ci in tp.cols() {
         // if it exist, make it None; if it doesn't exist, insert it
-        cols.entry(ci.name()).and_modify(|x| *x = None)
-          .or_insert(Some((tp.prc(), ci, idx)));
+        cols.entry(ci.name()).and_modify(|x| *x = None).or_insert(Some((tp.prc(), ci, idx)));
       }
     }
     debug_assert_eq!(tbls.len(), tbl_num);

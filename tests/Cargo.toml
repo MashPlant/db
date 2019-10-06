@@ -12,3 +12,5 @@ db = { path = "../db" }
 index = { path = "../index" }
 query = { path = "../query" }
 driver = { path = "../driver" }
+rand = "0.7"
+rand_chacha = "0.2"

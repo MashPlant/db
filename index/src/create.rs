@@ -7,7 +7,7 @@ use crate::{Index, handle_all};
 pub fn create<'a>(db: &mut Db, table: &'a str, col: &'a str) -> Result<'a, ()> {
   unsafe {
     let (tp_id, tp) = db.get_tp(table)?;
-    let ci = tp.get_ci(col)?;;
+    let ci = tp.get_ci(col)?;
     let ci_id = ci.idx(&tp.cols);
     if ci.index != !0 { return Err(DupIndex(col)); }
     db.alloc_index(ci);

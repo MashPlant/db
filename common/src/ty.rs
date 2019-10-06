@@ -4,7 +4,7 @@ use chrono::NaiveDate;
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum BareTy { Int, Bool, Float, Char, VarChar, Date }
+pub enum BareTy { Int, Bool, Float, VarChar, Date }
 
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -23,12 +23,12 @@ impl ColTy {
   // char and varchar can have size = 255 + 1, so u16 is necessary
   pub fn size(self) -> u16 {
     use BareTy::*;
-    match self.ty { Int => 4, Bool => 1, Float => 4, Char | VarChar => self.size as u16 + 1, Date => 4 }
+    match self.ty { Int => 4, Bool => 1, Float => 4, VarChar => self.size as u16 + 1, Date => 4 }
   }
 
   pub fn align4(self) -> bool {
     use BareTy::*;
-    match self.ty { Int | Float | Date => true, Bool | Char | VarChar => false }
+    match self.ty { Int | Float | Date => true, Bool | VarChar => false }
   }
 }
 

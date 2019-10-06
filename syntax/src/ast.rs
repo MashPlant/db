@@ -1,7 +1,6 @@
 use common::*;
 use std::fmt;
 
-#[derive(Debug)]
 pub enum Stmt<'a> {
   Insert(Insert<'a>),
   Delete(Delete<'a>),
@@ -16,9 +15,8 @@ pub enum Stmt<'a> {
   DropTable(&'a str),
   ShowTable(&'a str),
   ShowTables,
-  // (table, col)
-  CreateIndex(&'a str, &'a str),
-  DropIndex(&'a str, &'a str),
+  CreateIndex { table: &'a str, col: &'a str },
+  DropIndex { table: &'a str, col: &'a str },
 }
 
 #[derive(Debug)]
@@ -88,6 +86,7 @@ pub enum TableConsKind<'a> {
   Check(Vec<Lit<'a>>),
 }
 
+#[derive(Copy, Clone)]
 pub enum Expr<'a> {
   Cmp(CmpOp, ColRef<'a>, Atom<'a>),
   // true for `is null`, false for `is not null`
@@ -115,9 +114,22 @@ impl CmpOp {
   }
 }
 
+#[derive(Copy, Clone)]
 pub enum Atom<'a> {
   ColRef(ColRef<'a>),
   Lit(Lit<'a>),
+}
+
+impl fmt::Debug for Stmt<'_> {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    use Stmt::*;
+    match self {
+      Insert(x) => write!(f, "{:?}", x), Delete(x) => write!(f, "{:?}", x), Select(x) => write!(f, "{:?}", x), Update(x) => write!(f, "{:?}", x), CreateTable(x) => write!(f, "{:?}", x),
+      CreateDb(x) => write!(f, "CreateDb(\"{}\")", x), DropDb(x) => write!(f, "DropDb(\"{}\")", x), ShowDb(x) => write!(f, "ShowDb(\"{}\")", x), UseDb(x) => write!(f, "UseDb(\"{}\")", x), DropTable(x) => write!(f, "DropTable(\"{}\")", x), ShowTable(x) => write!(f, "ShowTable(\"{}\")", x),
+      ShowDbs => write!(f, "ShowDbs"), ShowTables => write!(f, "ShowTables"),
+      CreateIndex { table, col } => write!(f, "CreateIndex({}.{})", table, col), DropIndex { table, col } => write!(f, "DropIndex({}.{})", table, col)
+    }
+  }
 }
 
 impl fmt::Debug for ColRef<'_> {

@@ -101,7 +101,7 @@ impl InsertCtx<'_> {
             ($ty: ident) => {{
               let index = Index::<{ $ty }>::new(db, Rid::new(f_table_page, ci.foreign_col as u32));
               if !index.contains(ptr) {
-                return Err(InsertNoExistOnForeignKey { col: ci.name(), val: vals.get_unchecked(i).to_owned() });
+                return Err(InsertNonexistentForeignKey { col: ci.name(), val: vals.get_unchecked(i).to_owned() });
               }
             }};
           }
@@ -144,7 +144,7 @@ impl InsertCtx<'_> {
     for &col in pks {
       let ptr = data.add(col.off as usize);
       match col.ty {
-        ColTy { ty: Char, size } | ColTy { ty: VarChar, size } => for i in 0..size as usize {
+        ColTy { ty: VarChar, size } => for i in 0..size as usize {
           hash = hash.wrapping_mul(SEED).wrapping_add(*ptr.add(i) as u64);
         }
         ColTy { ty: Int, .. } | ColTy { ty: Float, .. } | ColTy { ty: Date, .. } =>

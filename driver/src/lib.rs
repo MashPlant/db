@@ -18,9 +18,13 @@ impl Eval {
     Ok(())
   }
 
-  pub fn exec_all_repl(&mut self, code: &str) {
-    if let Err(e) = self.exec_all(code, |x| println!(">> {:?}", x), |x| if !x.is_empty() { println!("{}", x) }) {
-      eprintln!("Error: {:?}", e);
+  pub fn exec_repl(&mut self, code: &str) {
+    match &syntax::work(code) {
+      Ok(ss) => for s in ss {
+        println!(">> {:?}", s);
+        match self.exec(s) { Ok(res) => if !res.is_empty() { println!("{}", res); }, Err(e) => eprintln!("Error: {:?}", e) }
+      }
+      Err(e) => eprintln!("Error: {:?}", e),
     }
   }
 
@@ -28,9 +32,9 @@ impl Eval {
     use Stmt::*;
     Ok(match sql {
       Insert(i) => (query::insert(i, self.db()?)?, "".into()).1,
-      Delete(d) => (query::delete(d, self.db()?)?, "".into()).1,
+      Delete(d) => query::delete(d, self.db()?)?.into(),
       Select(s) => query::select(s, self.db()?)?.to_csv()?.into(),
-      Update(u) => (query::update(u, self.db()?)?, "".into()).1,
+      Update(u) => query::update(u, self.db()?)?.into(),
       &CreateDb(path) => (Db::create(path), "".into()).1,
       &DropDb(path) => {
         if Some(path) == self.db.as_ref().map(|db| db.path()) { self.db = None; }
@@ -53,8 +57,8 @@ impl Eval {
       &DropTable(name) => (self.db()?.drop_table(name)?, "".into()).1,
       &ShowTable(name) => self.db()?.show_table(name)?.into(),
       ShowTables => self.db()?.show_tables().into(),
-      &CreateIndex(table, col) => (index::create(self.db()?, table, col)?, "".into()).1,
-      &DropIndex(table, col) => (self.db()?.drop_index(table, col)?, "".into()).1
+      &CreateIndex { table, col } => (index::create(self.db()?, table, col)?, "".into()).1,
+      &DropIndex { table, col } => (self.db()?.drop_index(table, col)?, "".into()).1
     })
   }
 

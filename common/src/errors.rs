@@ -38,7 +38,8 @@ pub enum Error<'a> {
   // there is no UpdateTableWithForeignLink, it will be rejected by UpdateWithIndex
   DropTableWithForeignLink(&'a str),
   DeleteTableWithForeignLink(&'a str),
-  InvalidLike(regex::Error),
+  InvalidDate { date: &'a str, reason: chrono::ParseError },
+  InvalidLike { like: &'a str, reason: regex::Error },
   InvalidLikeTy(BareTy),
   IncompatibleForeignTy { foreign: ColTy, own: ColTy },
   RecordTyMismatch { expect: BareTy, actual: BareTy },
@@ -48,10 +49,9 @@ pub enum Error<'a> {
   PutStrTooLong { limit: u8, actual: usize },
   PutNullOnNotNull,
   InsertDupOnUniqueKey { col: &'a str, val: Lit<'a> },
-  InsertNoExistOnForeignKey { col: &'a str, val: Lit<'a> },
+  InsertNonexistentForeignKey { col: &'a str, val: Lit<'a> },
   InsertDupCompositePrimaryKey,
   InsertNotInCheck { col: &'a str, val: Lit<'a> },
-  InvalidDate { date: &'a str, reason: chrono::ParseError },
   // below 2 not supported
   UpdateWithIndex(&'a str),
   UpdateWithCheck(&'a str),

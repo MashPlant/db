@@ -5,7 +5,7 @@ use db::Db;
 use index::{Index, handle_all};
 use crate::{predicate::one_where, is_null, filter::filter};
 
-pub fn delete<'a>(d: &Delete<'a>, db: &mut Db) -> Result<'a, ()> {
+pub fn delete<'a>(d: &Delete<'a>, db: &mut Db) -> Result<'a, String> {
   unsafe {
     let ti = db.dp().get_ti(d.table)?;
     if db.has_foreign_link_to(ti) { return Err(DeleteTableWithForeignLink(d.table)); }
@@ -28,10 +28,8 @@ pub fn delete<'a>(d: &Delete<'a>, db: &mut Db) -> Result<'a, ()> {
         handle_all!(ci.ty.ty, handle);
       }
     }
-    for &(_, rid) in &del {
-      tp.count -= 1;
-      db.dealloc_data_slot(tp, rid);
-    }
-    Ok(())
+    tp.count -= del.len() as u32;
+    for &(_, rid) in &del { db.dealloc_data_slot(tp, rid); }
+    Ok(format!("{} record(s) deleted", del.len()))
   }
 }
