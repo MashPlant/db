@@ -18,65 +18,60 @@ macro_rules! handle_op {
 // the pointer to the start address of the whole data slot
 
 // assume both lhs and rhs belongs to tp's table, so ColRef::table is not checked
-pub unsafe fn one_predicate<'a>(e: &Expr<'a>, tp: &TablePage) -> Result<'a, Box<dyn Fn(*const u8) -> bool>> {
+pub unsafe fn one_predicate<'a>(e: &Cond<'a>, tp: &TablePage) -> Result<'a, Box<dyn Fn(*const u8) -> bool>> {
   let tp = tp.pr();
   let l = tp.get_ci(e.lhs_col().col)?;
-  let l_id = l.idx(&tp.cols) as usize;
-  let l_off = l.off as usize;
+  let l_id = l.idx(&tp.cols) as u8; // reduce the size of lambda closure, do conversion inside lambda
+  let l_off = l.off;
   match *e {
-    Expr::Cmp(op, _, r) => match r {
+    Cond::Cmp(op, _, r) => match r {
       Atom::Lit(r) => {
         macro_rules! cmp {
-          ($op: tt, $p: ident, $l: expr, $r: expr) => { Ok(Box::new(move |$p| !is_null($p, l_id) && $l $op $r)) };
+          ($op: tt, $p: ident, $l: expr, $r: expr) => { Ok(Box::new(move |$p| !is_null($p, l_id as u32) && $l $op $r)) };
         }
         // the match logic is basically the same as the logic in `fill_ptr`, though the content is different
-        match (l.ty.ty, r) {
+        match (l.ty.ty, r.lit()) {
           (_, Lit::Null) => Ok(Box::new(|_| false)), // comparing with null always returns false
-          (Int, Lit::Int(v)) => handle_op!(cmp, op, p, *(p.add(l_off) as *const i32), v),
-          (Bool, Lit::Bool(v)) => handle_op!(cmp, op, p, *(p.add(l_off) as *const bool), v),
-          (Float, Lit::Float(v)) => handle_op!(cmp, op, p, *(p.add(l_off) as *const f32), v),
-          // convert int to float for comparison, below (occurs twice) are the same
-          (Int, Lit::Float(v)) => handle_op!(cmp, op, p, *(p.add(l_off) as *const i32) as f32, v),
-          (Float, Lit::Int(v)) => handle_op!(cmp, op, p, *(p.add(l_off) as *const f32), v as f32),
+          (Bool, Lit::Bool(v)) => handle_op!(cmp, op, p, *(p.add(l_off as usize) as *const bool), v),
+          (Int, Lit::Number(v)) => handle_op!(cmp, op, p, *(p.add(l_off as usize) as *const i32), v as i32),
+          (Float, Lit::Number(v)) => handle_op!(cmp, op, p, *(p.add(l_off as usize) as *const f32), v as f32),
+          (Date, Lit::Str(v)) => match NaiveDate::parse_from_str(v, "%Y-%m-%d") {
+            Ok(date) => handle_op!(cmp, op, p, *(p.add(l_off as usize) as *const NaiveDate), date),
+            Err(reason) => return Err(InvalidDate { date: v, reason })
+          }
           (VarChar, Lit::Str(v)) => {
             let v = Box::<str>::from(v);
-            handle_op!(cmp, op, p, str_from_parts(p.add(l_off + 1), *p.add(l_off) as usize), v.as_ref())
-          }
-          (Date, Lit::Str(v)) => match NaiveDate::parse_from_str(v, "%Y-%m-%d") {
-            Ok(date) => handle_op!(cmp, op, p, *(p.add(l_off) as *const NaiveDate), date),
-            Err(reason) => return Err(InvalidDate { date: v, reason })
+            handle_op!(cmp, op, p, str_from_db(p.add(l_off as usize)), v.as_ref())
           }
           (expect, r) => return Err(RecordLitTyMismatch { expect, actual: r.ty() })
         }
       }
       Atom::ColRef(r) => {
         let r = tp.get_ci(r.col)?;
-        let r_id = r.idx(&tp.cols) as usize;
-        let r_off = r.off as usize;
+        let r_id = r.idx(&tp.cols) as u16;
+        let r_off = r.off;
         macro_rules! cmp {
-          ($op: tt, $p: ident, $l: expr, $r: expr) => { Ok(Box::new(move |$p| !is_null($p, l_id) && !is_null($p, r_id) && $l $op $r)) };
+          ($op: tt, $p: ident, $l: expr, $r: expr) => { Ok(Box::new(move |$p| !is_null($p, l_id as u32) && !is_null($p, r_id as u32) && $l $op $r)) };
         }
         match (l.ty.ty, r.ty.ty) {
-          (Int, Int) => handle_op!(cmp, op, p, *(p.add(l_off) as *const i32), *(p.add(r_off) as *const i32)),
-          (Bool, Bool) => handle_op!(cmp, op, p, *(p.add(l_off) as *const bool), *(p.add(r_off) as *const bool)),
-          (Float, Float) => handle_op!(cmp, op, p, *(p.add(l_off) as *const f32), *(p.add(r_off) as *const f32)),
-          (Int, Float) => handle_op!(cmp, op, p, *(p.add(l_off) as *const i32) as f32, *(p.add(r_off) as *const f32)),
-          (Float, Int) => handle_op!(cmp, op, p, *(p.add(l_off) as *const f32), *(p.add(r_off) as *const i32) as f32),
-          (VarChar, VarChar) => handle_op!(cmp, op, p, str_from_parts(p.add(l_off + 1), *p.add(l_off) as usize), str_from_parts(p.add(r_off + 1), *p.add(r_off) as usize)),
-          (Date, Date) => handle_op!(cmp, op, p, *(p.add(l_off) as *const NaiveDate), *(p.add(r_off) as *const NaiveDate)),
+          (Bool, Bool) => handle_op!(cmp, op, p, *(p.add(l_off as usize) as *const bool), *(p.add(r_off as usize) as *const bool)),
+          (Int, Int) => handle_op!(cmp, op, p, *(p.add(l_off as usize) as *const i32), *(p.add(r_off as usize) as *const i32)),
+          (Float, Float) => handle_op!(cmp, op, p, *(p.add(l_off as usize) as *const f32), *(p.add(r_off as usize) as *const f32)),
+          (Int, Float) => handle_op!(cmp, op, p, *(p.add(l_off as usize) as *const i32) as f32, *(p.add(r_off as usize) as *const f32)),
+          (Float, Int) => handle_op!(cmp, op, p, *(p.add(l_off as usize) as *const f32), *(p.add(r_off as usize) as *const i32) as f32),
+          (Date, Date) => handle_op!(cmp, op, p, *(p.add(l_off as usize) as *const NaiveDate), *(p.add(r_off as usize) as *const NaiveDate)),
+          (VarChar, VarChar) => handle_op!(cmp, op, p, str_from_db(p.add(l_off as usize)), str_from_db(p.add(r_off as usize))),
           (expect, actual) => return Err(RecordTyMismatch { expect, actual })
         }
       }
     },
-    Expr::Null(_, null) => Ok(if null { Box::new(move |p| is_null(p, l_id)) } else { Box::new(move |p| !is_null(p, l_id)) }),
-    Expr::Like(_, like) => {
+    Cond::Null(_, null) => Ok(if null { Box::new(move |p| is_null(p, l_id as u32)) } else { Box::new(move |p| !is_null(p, l_id as u32)) }),
+    Cond::Like(_, like) => {
       if l.ty.ty != VarChar { return Err(InvalidLikeTy(l.ty.ty)); }
       let re = regex::escape(like).replace('%', ".*").replace('_', ".");
       match regex::Regex::new(&re) {
-        Ok(re) => Ok(Box::new(move |p|
-          !is_null(p, l_id) && re.is_match(str_from_parts(p.add(l_off + 1), *p.add(l_off) as usize))
-        )),
-        Err(reason) => Err(InvalidLike { like, reason }),
+        Ok(re) => Ok(Box::new(move |p| !is_null(p, l_id as u32) && re.is_match(str_from_db(p.add(l_off as usize))))),
+        Err(reason) => Err(InvalidLike { like, reason: Box::new(reason) }),
       }
     }
   }
@@ -84,35 +79,31 @@ pub unsafe fn one_predicate<'a>(e: &Expr<'a>, tp: &TablePage) -> Result<'a, Box<
 
 pub unsafe fn cross_predicate<'a>(op: CmpOp, col: (&ColInfo, &ColInfo), tp: (&TablePage, &TablePage)) -> Result<'a, Box<dyn Fn((*const u8, *const u8)) -> bool>> {
   let (l, r) = col;
-  let (l_id, r_id) = (l.idx(&tp.0.cols) as usize, r.idx(&tp.1.cols) as usize);
-  let (l_off, r_off) = (l.off as usize, r.off as usize);
+  let (l_id, r_id) = (l.idx(&tp.0.cols) as u16, r.idx(&tp.1.cols) as u16);
+  let (l_off, r_off) = (l.off, r.off);
   macro_rules! cmp {
-    ($op: tt, $p: ident, $l: expr, $r: expr) => { Ok(Box::new(move |$p| !is_null($p.0, l_id) && !is_null($p.1, r_id) && $l $op $r)) };
+    ($op: tt, $p: ident, $l: expr, $r: expr) => { Ok(Box::new(move |$p| !is_null($p.0, l_id as u32) && !is_null($p.1, r_id as u32) && $l $op $r)) };
   }
   match (l.ty.ty, r.ty.ty) {
-    (Int, Int) => handle_op!(cmp, op, p, *(p.0.add(l_off) as *const i32), *(p.1.add(r_off) as *const i32)),
-    (Bool, Bool) => handle_op!(cmp, op, p, *(p.0.add(l_off) as *const bool), *(p.1.add(r_off) as *const bool)),
-    (Float, Float) => handle_op!(cmp, op, p, *(p.0.add(l_off) as *const f32), *(p.1.add(r_off) as *const f32)),
-    (Int, Float) => handle_op!(cmp, op, p, *(p.0.add(l_off) as *const i32) as f32, *(p.1.add(r_off) as *const f32)),
-    (Float, Int) => handle_op!(cmp, op, p, *(p.0.add(l_off) as *const f32), *(p.1.add(r_off) as *const i32) as f32),
-    (VarChar, VarChar) => handle_op!(cmp, op, p, str_from_parts(p.0.add(l_off + 1), *p.0.add(l_off) as usize), str_from_parts(p.1.add(r_off + 1), *p.1.add(r_off) as usize)),
-    (Date, Date) => handle_op!(cmp, op, p, *(p.0.add(l_off) as *const NaiveDate), *(p.1.add(r_off) as *const NaiveDate)),
+    (Bool, Bool) => handle_op!(cmp, op, p, *(p.0.add(l_off as usize) as *const bool), *(p.1.add(r_off as usize) as *const bool)),
+    (Int, Int) => handle_op!(cmp, op, p, *(p.0.add(l_off as usize) as *const i32), *(p.1.add(r_off as usize) as *const i32)),
+    (Float, Float) => handle_op!(cmp, op, p, *(p.0.add(l_off as usize) as *const f32), *(p.1.add(r_off as usize) as *const f32)),
+    (Int, Float) => handle_op!(cmp, op, p, *(p.0.add(l_off as usize) as *const i32) as f32, *(p.1.add(r_off as usize) as *const f32)),
+    (Float, Int) => handle_op!(cmp, op, p, *(p.0.add(l_off as usize) as *const f32), *(p.1.add(r_off as usize) as *const i32) as f32),
+    (Date, Date) => handle_op!(cmp, op, p, *(p.0.add(l_off as usize) as *const NaiveDate), *(p.1.add(r_off as usize) as *const NaiveDate)),
+    (VarChar, VarChar) => handle_op!(cmp, op, p, str_from_db(p.0.add(l_off as usize)), str_from_db(p.1.add(r_off as usize))),
     (expect, actual) => return Err(RecordTyMismatch { expect, actual })
   }
 }
 
-pub unsafe fn one_where<'a>(where_: &[Expr<'a>], table: &str, tp: &TablePage) -> Result<'a, impl Fn(*const u8) -> bool> {
+pub unsafe fn one_where<'a>(where_: &[Cond<'a>], table: &str, tp: &TablePage) -> Result<'a, impl Fn(*const u8) -> bool> {
   let mut preds = Vec::with_capacity(where_.len());
-  for e in where_ {
-    let (l, r) = (e.lhs_col(), e.rhs_col());
-    if let Some(t) = l.table {
-      if t != table { return Err(NoSuchTable(t)); }
-    }
-    if let Some(&ColRef { table: Some(t), .. }) = r {
-      if t != table { return Err(NoSuchTable(t)); }
-    }
+  for cond in where_ {
+    let (l, r) = (cond.lhs_col(), cond.rhs_col());
+    if let Some(t) = l.table { if t != table { return Err(NoSuchTable(t)); } }
+    if let Some(&ColRef { table: Some(t), .. }) = r { if t != table { return Err(NoSuchTable(t)); } }
     // table name is checked before, col name & type & value format/size all checked in one_predicate
-    preds.push(one_predicate(e, tp)?);
+    preds.push(one_predicate(cond, tp)?);
   }
   Ok(and(preds))
 }

@@ -22,14 +22,14 @@ pub enum Stmt<'a> {
 #[derive(Debug)]
 pub struct Insert<'a> {
   pub table: &'a str,
-  pub vals: Vec<Vec<Lit<'a>>>,
+  pub vals: Vec<Vec<CLit<'a>>>,
 }
 
 #[derive(Debug)]
 pub struct Update<'a> {
   pub table: &'a str,
-  pub sets: Vec<(&'a str, Lit<'a>)>,
-  pub where_: Vec<Expr<'a>>,
+  pub sets: Vec<(&'a str, Expr<'a>)>,
+  pub where_: Vec<Cond<'a>>,
 }
 
 #[derive(Debug)]
@@ -37,13 +37,13 @@ pub struct Select<'a> {
   // None for select *
   pub ops: Option<Vec<Agg<'a>>>,
   pub tables: Vec<&'a str>,
-  pub where_: Vec<Expr<'a>>,
+  pub where_: Vec<Cond<'a>>,
 }
 
 #[derive(Debug)]
 pub struct Delete<'a> {
   pub table: &'a str,
-  pub where_: Vec<Expr<'a>>,
+  pub where_: Vec<Cond<'a>>,
 }
 
 #[derive(Copy, Clone)]
@@ -83,32 +83,38 @@ pub struct TableCons<'a> {
 pub enum TableConsKind<'a> {
   Primary,
   Foreign { table: &'a str, col: &'a str },
-  Check(Vec<Lit<'a>>),
+  Check(Vec<CLit<'a>>),
 }
 
 #[derive(Copy, Clone)]
-pub enum Expr<'a> {
+pub enum Cond<'a> {
   Cmp(CmpOp, ColRef<'a>, Atom<'a>),
   // true for `is null`, false for `is not null`
   Null(ColRef<'a>, bool),
   Like(ColRef<'a>, &'a str),
 }
 
-impl<'a> Expr<'a> {
+// this is pure arithmetic expr, only appears in the set list of update, not in where list of select and delete
+pub enum Expr<'a> {
+  Atom(Atom<'a>),
+  Neg(Box<Expr<'a>>),
+  Bin(BinOp, Box<Expr<'a>>, Box<Expr<'a>>),
+}
+
+impl<'a> Cond<'a> {
   pub fn lhs_col(&self) -> &ColRef<'a> {
-    match self { Expr::Cmp(_, l, _) | Expr::Null(l, _) | Expr::Like(l, _) => l }
+    match self { Cond::Cmp(_, l, _) | Cond::Null(l, _) | Cond::Like(l, _) => l }
   }
 
   pub fn rhs_col(&self) -> Option<&ColRef<'a>> {
-    match self { Expr::Cmp(_, _, Atom::ColRef(r)) => Some(r), _ => None }
+    match self { Cond::Cmp(_, _, Atom::ColRef(r)) => Some(r), _ => None }
   }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum CmpOp { Lt, Le, Ge, Gt, Eq, Ne }
 
 impl CmpOp {
-  #[cfg_attr(tarpaulin, skip)]
   pub fn name(self) -> &'static str {
     match self { CmpOp::Lt => "<", CmpOp::Le => "<=", CmpOp::Ge => ">=", CmpOp::Gt => ">", CmpOp::Eq => "==", CmpOp::Ne => "!=" }
   }
@@ -117,7 +123,7 @@ impl CmpOp {
 #[derive(Copy, Clone)]
 pub enum Atom<'a> {
   ColRef(ColRef<'a>),
-  Lit(Lit<'a>),
+  Lit(CLit<'a>),
 }
 
 impl fmt::Debug for Stmt<'_> {
@@ -125,7 +131,7 @@ impl fmt::Debug for Stmt<'_> {
     use Stmt::*;
     match self {
       Insert(x) => write!(f, "{:?}", x), Delete(x) => write!(f, "{:?}", x), Select(x) => write!(f, "{:?}", x), Update(x) => write!(f, "{:?}", x), CreateTable(x) => write!(f, "{:?}", x),
-      CreateDb(x) => write!(f, "CreateDb(\"{}\")", x), DropDb(x) => write!(f, "DropDb(\"{}\")", x), ShowDb(x) => write!(f, "ShowDb(\"{}\")", x), UseDb(x) => write!(f, "UseDb(\"{}\")", x), DropTable(x) => write!(f, "DropTable(\"{}\")", x), ShowTable(x) => write!(f, "ShowTable(\"{}\")", x),
+      CreateDb(x) => write!(f, "CreateDb({:?})", x), DropDb(x) => write!(f, "DropDb({:?})", x), ShowDb(x) => write!(f, "ShowDb({:?})", x), UseDb(x) => write!(f, "UseDb({:?})", x), DropTable(x) => write!(f, "DropTable({:?})", x), ShowTable(x) => write!(f, "ShowTable({:?})", x),
       ShowDbs => write!(f, "ShowDbs"), ShowTables => write!(f, "ShowTables"),
       CreateIndex { table, col } => write!(f, "CreateIndex({}.{})", table, col), DropIndex { table, col } => write!(f, "DropIndex({}.{})", table, col)
     }
@@ -150,12 +156,22 @@ impl fmt::Debug for Atom<'_> {
   }
 }
 
+impl fmt::Debug for Cond<'_> {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      Cond::Cmp(op, l, r) => write!(f, "{:?} {} {:?}", l, op.name(), r),
+      Cond::Null(c, null) => write!(f, "{:?} is {}null", c, if *null { "" } else { "not " }),
+      Cond::Like(c, s) => write!(f, "{:?} like '{}'", c, s),
+    }
+  }
+}
+
 impl fmt::Debug for Expr<'_> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match self {
-      Expr::Cmp(op, l, r) => write!(f, "{:?} {} {:?}", l, op.name(), r),
-      Expr::Null(c, null) => write!(f, "{:?} is {}null", c, if *null { "" } else { "not " }),
-      Expr::Like(c, s) => write!(f, "{:?} like '{}'", c, s),
+      Expr::Atom(x) => write!(f, "{:?}", x),
+      Expr::Neg(x) => write!(f, "-({:?})", x),
+      Expr::Bin(op, l, r) => write!(f, "({:?}) {} ({:?})", l, op.name(), r)
     }
   }
 }

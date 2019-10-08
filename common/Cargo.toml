@@ -10,5 +10,4 @@ chrono = "0.4"
 regex = "1"
 hashbrown = { version = "0.5", features = ["nightly"] }
 indexmap = "1.2.0"
-csv = "1.1"
 unchecked_unwrap = "1.0.1"

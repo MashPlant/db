@@ -20,8 +20,8 @@ pub struct ColInfo {
   pub index: u32,
   // check page id, !0 for none
   pub check: u32,
-  // index in DbPage::tables, !0 for none
-  pub foreign_table: u8,
+  // index of TablePage, !0 for none
+  pub foreign_table: u32,
   // index in TablePage::cols, if foreign_table == !0, foreign_col is meaningless
   pub foreign_col: u8,
   pub flags: ColFlags,
@@ -55,32 +55,36 @@ pub struct TablePage {
   pub next: u32,
   // !0 for none
   pub first_free: u32,
-  // there are at most 64G/16 records, so u32 is enough
+  // there are at most (64G / 16) = 4G records, so u32 is enough
   pub count: u32,
   // the size of a single slot, including null-bitset and data
   pub size: u16,
   // always equal to MAX_DATA_BYTE / size, store it just to avoid division
   pub cap: u16,
+  pub name_len: u8,
+  pub name: [u8; MAX_TABLE_NAME],
   pub col_num: u8,
-  pub _rsv: [u8; 43],
   pub cols: [ColInfo; MAX_COL],
 }
 
-pub const MAX_COL_NAME: usize = 48;
+pub const MAX_TABLE_NAME: usize = 42;
+pub const MAX_COL_NAME: usize = 45;
 pub const MAX_COL: usize = 127;
 
 impl TablePage {
-  pub fn init(&mut self, id: u32, size: u16, col_num: u8) {
+  pub unsafe fn init(&mut self, id: u32, size: u16, col_num: u8, name: &str) {
     (self.prev = id, self.next = id);  // self-circle to represent empty linked list
     self.first_free = !0;
     self.count = 0;
     self.size = size;
     self.cap = MAX_DATA_BYTE as u16 / size;
+    self.name_len = name.len() as u8;
+    self.name.as_mut_ptr().copy_from_nonoverlapping(name.as_ptr(), name.len());
     self.col_num = col_num;
   }
 
-  pub unsafe fn names<'a>(&'a self) -> impl Iterator<Item=&'a str> + 'a {
-    self.cols().iter().map(|c| c.name())
+  pub unsafe fn name<'a>(&self) -> &'a str {
+    str_from_parts(self.name.as_ptr(), self.name_len as usize)
   }
 
   pub unsafe fn cols<'a>(&self) -> &'a [ColInfo] {
@@ -89,7 +93,7 @@ impl TablePage {
   }
 
   pub unsafe fn get_ci<'a, 'b>(&mut self, col: &'b str) -> Result<'b, &'a mut ColInfo> {
-    match self.pr().names().enumerate().find(|n| n.1 == col) {
+    match self.pr().cols().iter().map(|c| c.name()).enumerate().find(|n| n.1 == col) {
       Some((idx, _)) => Ok(self.pr().cols.get_unchecked_mut(idx)),
       None => Err(NoSuchCol(col)),
     }

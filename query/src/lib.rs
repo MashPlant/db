@@ -9,5 +9,7 @@ mod filter;
 
 pub use crate::{insert::*, delete::*, select::*, update::*};
 
-// null bitset is in the header part of a data slot
-pub(crate) unsafe fn is_null(p: *const u8, idx: usize) -> bool { common::bsget(p as *const u32, idx) }
+// `data` points to the begining of the whole data slot
+pub(crate) unsafe fn is_null(data: *const u8, ci_id: u32) -> bool {
+  common::bsget(data as *const u32, ci_id as usize)
+}

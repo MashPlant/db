@@ -1,4 +1,4 @@
-use std::{ptr::NonNull, mem};
+use std::mem;
 
 use common::*;
 use db::Db;
@@ -14,7 +14,7 @@ pub struct IndexIter {
 
 impl IndexIter {
   // NonNull<u8> is the start address of data_rid pair
-  pub unsafe fn next(&mut self) -> Option<(NonNull<u8>, Rid)> {
+  pub unsafe fn next(&mut self) -> Option<Rid> {
     let mut ip = self.db.r().get_page::<IndexPage>(self.page);
     if self.slot == ip.count {
       if ip.next == !0 { return None; }
@@ -25,7 +25,7 @@ impl IndexIter {
     let slot = (self.slot, self.slot += 1).0;
     let data_rid = ip.data.as_mut_ptr().add((slot * ip.slot_size()) as usize);
     let rid = *(data_rid.add(self.rid_off as usize) as *const Rid);
-    Some((NonNull::new_unchecked(data_rid), rid))
+    Some(rid)
   }
 }
 
@@ -50,8 +50,9 @@ impl<const T: BareTy> Index<{ T }> {
   }
 
   pub unsafe fn lower_bound(&mut self, data: *const u8) -> IndexIter {
-    // rid = 00..00, which is the smallest
-    let data_rid = self.make_data_rid(data, mem::transmute(0));
+    // 00..00 is the smallest, but this will trigger a warning (because Rid is marked as non-zero)
+    // so use 00..01, it is also small enough
+    let data_rid = self.make_data_rid(data, mem::transmute(1));
     let (page, slot) = self.do_upper_bound(data_rid.ptr);
     IndexIter { db: self.db(), page, slot, rid_off: self.rid_off }
   }

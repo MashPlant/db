@@ -18,22 +18,12 @@ impl Eval {
     Ok(())
   }
 
-  pub fn exec_repl(&mut self, code: &str) {
-    match &syntax::work(code) {
-      Ok(ss) => for s in ss {
-        println!(">> {:?}", s);
-        match self.exec(s) { Ok(res) => if !res.is_empty() { println!("{}", res); }, Err(e) => eprintln!("Error: {:?}", e) }
-      }
-      Err(e) => eprintln!("Error: {:?}", e),
-    }
-  }
-
   pub fn exec<'a>(&mut self, sql: &Stmt<'a>) -> Result<'a, Cow<str>> {
     use Stmt::*;
     Ok(match sql {
       Insert(i) => (query::insert(i, self.db()?)?, "".into()).1,
       Delete(d) => query::delete(d, self.db()?)?.into(),
-      Select(s) => query::select(s, self.db()?)?.to_csv()?.into(),
+      Select(s) => query::select(s, self.db()?)?.csv().into(),
       Update(u) => query::update(u, self.db()?)?.into(),
       &CreateDb(path) => (Db::create(path), "".into()).1,
       &DropDb(path) => {
@@ -46,9 +36,9 @@ impl Eval {
       }
       ShowDbs => {
         let mut s = String::new();
-        for e in fs::read_dir(".")? {
+        for entry in fs::read_dir(".")? {
           // `show_db` may fail because not all files are db format, just ignore these files
-          let _ = show_db(e?.path(), &mut s);
+          let _ = show_db(entry?.path(), &mut s);
         }
         s.into()
       }

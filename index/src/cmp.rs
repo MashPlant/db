@@ -11,12 +11,12 @@ impl<const T: BareTy> Cmp<{ T }> {
   pub unsafe fn cmp(l: *const u8, r: *const u8) -> Ordering {
     use BareTy::*;
     match T { // should be optimized out
-      Int => (*(l as *const i32)).cmp(&*(r as *const i32)),
       Bool => (*(l as *const bool)).cmp(&*(r as *const bool)),
+      Int => (*(l as *const i32)).cmp(&*(r as *const i32)),
       // it is safe because lexer only allow float like xxx.xxx comes in, and they are all comparable
       Float => (*(l as *const f32)).partial_cmp(&*(r as *const f32)).unchecked_unwrap(),
-      VarChar => str_from_parts(l.add(1), *l as usize).cmp(str_from_parts(r.add(1), *r as usize)),
       Date => (*(l as *const NaiveDate)).cmp(&*(r as *const NaiveDate)),
+      VarChar => str_from_db(l).cmp(str_from_db(r)),
     }
   }
 

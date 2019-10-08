@@ -14,3 +14,6 @@ members = [
 
 [profile.dev.overrides."parser-macros"]
 opt-level = 3
+
+[profile.release]
+panic = "abort"

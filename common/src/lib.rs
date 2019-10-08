@@ -24,5 +24,3 @@ pub type IndexMap<K, V> = indexmap::IndexMap<K, V, hashbrown::hash_map::DefaultH
 pub type IndexSet<K> = indexmap::IndexSet<K, hashbrown::hash_map::DefaultHashBuilder>;
 pub type HashMap<K, V> = hashbrown::HashMap<K, V>;
 pub type HashSet<K> = hashbrown::HashSet<K>;
-pub type HashEntry<'a, K, V> = hashbrown::hash_map::Entry<'a, K, V, hashbrown::hash_map::DefaultHashBuilder>;
-pub type IndexEntry<'a, K, V> = indexmap::map::Entry<'a, K, V>;

@@ -1,4 +1,4 @@
-use crate::{MAGIC_LEN, ColTy, BareTy, LitTy, Lit, AggOp};
+use crate::{MAGIC_LEN, ColTy, BareTy, LitTy, CLit, AggOp, BinOp};
 
 #[derive(Debug)]
 pub struct ParserError<'a> {
@@ -35,26 +35,23 @@ pub enum Error<'a> {
   NoSuchTable(&'a str),
   NoSuchCol(&'a str),
   NoSuchIndex(&'a str),
-  // there is no UpdateTableWithForeignLink, it will be rejected by UpdateWithIndex
-  DropTableWithForeignLink(&'a str),
-  DeleteTableWithForeignLink(&'a str),
+  // this includes delete from/drop a table that have a col with a foreign link
+  // and update a col with a foreign link (strictly speaking, in this case its name should be "AlterCol")
+  AlterTableWithForeignLink(&'a str),
   InvalidDate { date: &'a str, reason: chrono::ParseError },
-  InvalidLike { like: &'a str, reason: regex::Error },
+  InvalidLike { like: &'a str, reason: Box<regex::Error> },
   InvalidLikeTy(BareTy),
   IncompatibleForeignTy { foreign: ColTy, own: ColTy },
   RecordTyMismatch { expect: BareTy, actual: BareTy },
   RecordLitTyMismatch { expect: BareTy, actual: LitTy },
   InsertLenMismatch { expect: u8, actual: usize },
-  // these 2 can be used in both insert and update, so call them put
+  // put stands for insert or update`
   PutStrTooLong { limit: u8, actual: usize },
   PutNullOnNotNull,
-  InsertDupOnUniqueKey { col: &'a str, val: Lit<'a> },
-  InsertNonexistentForeignKey { col: &'a str, val: Lit<'a> },
-  InsertDupCompositePrimaryKey,
-  InsertNotInCheck { col: &'a str, val: Lit<'a> },
-  // below 2 not supported
-  UpdateWithIndex(&'a str),
-  UpdateWithCheck(&'a str),
+  PutDupOnUniqueKey { col: &'a str, val: CLit<'a> },
+  PutNonexistentForeignKey { col: &'a str, val: CLit<'a> },
+  PutNotInCheck { col: &'a str, val: CLit<'a> },
+  PutDupCompositePrimaryKey,
   AmbiguousCol(&'a str),
   DupPrimary(&'a str),
   DupForeign(&'a str),
@@ -64,7 +61,9 @@ pub enum Error<'a> {
   InvalidAgg { col: ColTy, op: AggOp },
   // select agg col together with non-agg col
   MixedSelect,
-  CSV(csv::Error),
+  Div0,
+  Mod0,
+  IncompatibleBin { op: BinOp, ty: LitTy },
   IO(std::io::Error),
 }
 
@@ -72,8 +71,4 @@ pub type Result<'a, T> = std::result::Result<T, Error<'a>>;
 
 impl From<std::io::Error> for Error<'_> {
   fn from(e: std::io::Error) -> Self { Error::IO(e) }
-}
-
-impl From<csv::Error> for Error<'_> {
-  fn from(e: csv::Error) -> Self { Error::CSV(e) }
 }

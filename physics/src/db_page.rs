@@ -1,17 +1,4 @@
-use common::{*, Error::*};
-
-#[repr(C)]
-pub struct TableInfo {
-  pub meta: u32,
-  pub name_len: u8,
-  pub name: [u8; MAX_TABLE_NAME],
-}
-
-impl TableInfo {
-  pub unsafe fn name<'a>(&self) -> &'a str {
-    str_from_parts(self.name.as_ptr(), self.name_len as usize)
-  }
-}
+use common::*;
 
 #[repr(C)]
 pub struct DbPage {
@@ -19,16 +6,14 @@ pub struct DbPage {
   pub _rsv1: [u8; 2],
   // !0 for none
   pub first_free: u32,
-  // using u8 here is not to save space(since there is still enough space in _rsv)
-  // but to explicitly show that u8 is exactly enough
-  pub table_num: u8,
-  pub _rsv2: [u8; 39],
-  // it is unpin, remove strategy = swap with last
-  pub tables: [TableInfo; MAX_TABLE],
+  // using u16 here is not to save space (since there is still enough space in _rsv)
+  // but to explicitly show that u16 is enough
+  pub table_num: u16,
+  pub _rsv2: [u8; 2],
+  pub tables: [u32; MAX_TABLE],
 }
 
-pub const MAX_TABLE_NAME: usize = 59;
-pub const MAX_TABLE: usize = 127;
+pub const MAX_TABLE: usize = 2041;
 
 impl DbPage {
   pub fn init(&mut self) {
@@ -37,24 +22,11 @@ impl DbPage {
     self.table_num = 0;
   }
 
-  pub unsafe fn names<'a>(&'a self) -> impl Iterator<Item=&'a str> + 'a {
-    debug_assert!(self.table_num < MAX_TABLE as u8);
-    (0..self.table_num as usize).map(move |i| self.tables.get_unchecked(i).name())
-  }
-
-  pub unsafe fn tables<'a>(&self) -> &'a [TableInfo] {
-    debug_assert!(self.table_num < MAX_TABLE as u8);
+  pub unsafe fn tables<'a>(&self) -> &'a [u32] {
+    debug_assert!(self.table_num < MAX_TABLE as u16);
     std::slice::from_raw_parts(self.tables.as_ptr(), self.table_num as usize)
-  }
-
-  pub unsafe fn get_ti<'a, 'b>(&mut self, table: &'b str) -> Result<'b, &'a mut TableInfo> {
-    for t in self.tables() { if t.name() == table { return Ok(t.pr()); } }
-    Err(NoSuchTable(table))
   }
 }
 
 #[cfg_attr(tarpaulin, skip)]
-fn _ck() {
-  const_assert_eq!(std::mem::size_of::<TableInfo>(), 64);
-  const_assert_eq!(std::mem::size_of::<DbPage>(), common::PAGE_SIZE);
-}
+fn _ck() { const_assert_eq!(std::mem::size_of::<DbPage>(), common::PAGE_SIZE); }

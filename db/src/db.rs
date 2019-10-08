@@ -33,9 +33,7 @@ impl Db {
       if size == 0 || size % PAGE_SIZE != 0 { return Err(InvalidSize(size)); }
       let mut mmap = MmapOptions::new().len(PAGE_SIZE * MAX_PAGE).map_mut(&file)?;
       let dp = (mmap.as_mut_ptr() as *mut DbPage).r();
-      if &dp.magic != MAGIC {
-        return Err(InvalidMagic(dp.magic));
-      }
+      if &dp.magic != MAGIC { return Err(InvalidMagic(dp.magic)); }
       Ok(Db { mmap, pages: (size / PAGE_SIZE) as u32, file, path: path.as_ref().to_string_lossy().into_owned() })
     }
   }
@@ -50,26 +48,22 @@ impl Db {
     unsafe {
       let dp = self.dp();
 
-      // validate table
-      if dp.table_num == MAX_TABLE as u8 { return Err(TableExhausted); }
+      // validate table and cols
+      if dp.table_num == MAX_TABLE as u16 { return Err(TableExhausted); }
       if c.name.len() >= MAX_TABLE_NAME { return Err(TableNameTooLong(c.name)); }
-
-      if dp.names().find(|&name| name == c.name).is_some() { return Err(DupTable(c.name)); }
+      if self.get_tp(c.name).is_ok() { return Err(DupTable(c.name)); }
       if c.cols.len() >= MAX_COL { return Err(ColTooMany(c.cols.len())); }
-      let mut cols = IndexSet::default();
+      // its V will be used later to validate col cons, only allow one primary / foreign / check for one col
+      let mut cols = IndexMap::default();
       for co in &c.cols {
-        if !cols.insert(co.name) { return Err(DupCol(co.name)); }
+        if cols.insert(co.name, (false, false, false)).is_some() { return Err(DupCol(co.name)); }
         if co.name.len() >= MAX_COL_NAME { return Err(ColNameTooLong(co.name)); }
       }
 
       // validate col cons
       let mut primary_cnt = 0;
-      let mut has_pfc = vec![(false, false, false); cols.len()]; // only allow one primary / foreign / check for one col
-
       for cons in &c.cons {
-        if let Some((idx, _)) = cols.get_full(cons.name) {
-          debug_assert!(idx < has_pfc.len());
-          let has_pfc = has_pfc.get_unchecked_mut(idx);
+        if let Some((idx, _, has_pfc)) = cols.get_full_mut(cons.name) {
           match &cons.kind {
             TableConsKind::Primary => {
               if has_pfc.0 { return Err(DupPrimary(cons.name)); }
@@ -85,7 +79,7 @@ impl Db {
               // maybe too strict here, don't allow foreign link between two types or shorter string to longer string (for simplicity of future handling)
               match (f_ty.ty, ty.ty) {
                 (VarChar, VarChar) if ty.size >= f_ty.size => {}
-                (Int, Int) | (Bool, Bool) | (Float, Float) | (Date, Date) => {}
+                (Bool, Bool) | (Int, Int) | (Float, Float) | (Date, Date) => {}
                 _ => return Err(IncompatibleForeignTy { foreign: f_ty, own: ty }),
               }
             }
@@ -97,10 +91,7 @@ impl Db {
               if check.len() * sz >= MAX_CHECK_BYTES { return Err(CheckTooLong(cons.name, check.len())); }
               let buf = Align4U8::new(ty.size() as usize); // dummy buffer
               for &c in check {
-                match c {
-                  Lit::Null => return Err(CheckNull(cons.name)),
-                  _ => fill_ptr(buf.ptr, ty, c)?,
-                }
+                if c.is_null() { return Err(CheckNull(cons.name)); } else { fill_ptr(buf.ptr, ty, c)?; }
               }
             }
           }
@@ -127,11 +118,11 @@ impl Db {
         size += c.ty.size();
       }
       size = (size + 3) & !3; // at last it should be aligned to keep the alignment of the next slot
-      tp.init(id, size.max(MIN_SLOT_SIZE as u16), c.cols.len() as u8);
+      tp.init(id, size.max(MIN_SLOT_SIZE as u16), c.cols.len() as u8, c.name);
 
       // handle table cons
       for cons in &c.cons {
-        let (idx, _) = cols.get_full(cons.name).unchecked_unwrap();
+        let (idx, _, _) = cols.get_full(cons.name).unchecked_unwrap();
         let ci = tp.cols.get_unchecked_mut(idx);
         match &cons.kind {
           TableConsKind::Primary => {
@@ -140,11 +131,9 @@ impl Db {
             if primary_cnt == 1 { ci.flags.set(ColFlags::UNIQUE, true); }
           }
           &TableConsKind::Foreign { table, col } => {
-            let f_ti = dp.get_ti(table).unchecked_unwrap();
-            let f_ti_id = f_ti.idx(&dp.tables);
-            let f_tp = self.get_page::<TablePage>(f_ti.meta);
+            let (f_tp_id, f_tp) = self.get_tp(table).unchecked_unwrap();
             let f_ci_id = f_tp.get_ci(col).unchecked_unwrap().idx(&f_tp.cols);
-            ci.foreign_table = f_ti_id as u8;
+            ci.foreign_table = f_tp_id;
             ci.foreign_col = f_ci_id as u8;
           }
           TableConsKind::Check(check) => {
@@ -162,11 +151,7 @@ impl Db {
         }
       }
 
-      // update table info in meta page
-      let ti = dp.tables.get_unchecked_mut(dp.table_num as usize);
-      ti.meta = id;
-      ti.name_len = c.name.len() as u8;
-      ti.name.as_mut_ptr().copy_from_nonoverlapping(c.name.as_ptr(), c.name.len());
+      *dp.tables.get_unchecked_mut(dp.table_num as usize) = id;
       dp.table_num += 1;
 
       tp.cols().iter()
@@ -179,33 +164,33 @@ impl Db {
   pub fn drop_table<'a>(&mut self, name: &'a str) -> Result<'a, ()> {
     unsafe {
       let dp = self.dp();
-      let ti = dp.get_ti(name)?;
-      if self.has_foreign_link_to(ti) { return Err(DropTableWithForeignLink(name)); }
-
-      let meta = ti.meta;
-      ti.p().swap(dp.tables.get_unchecked_mut(dp.table_num as usize - 1));
-      dp.table_num -= 1;
-      let tp = self.get_page::<TablePage>(meta);
-      tp.cols().iter().filter(|ci| ci.index != !0).for_each(|ci| self.drop_index_impl(ci.pr()));
-      let mut cur = tp.next;
-      loop {
-        // both TablePage and DataPage use [1] as next, [0] as prev
-        let nxt = self.get_page::<(u32, u32)>(cur).1;
-        self.dealloc_page(cur);
-        cur = nxt;
-        if cur == meta { break; }
+      for (idx, &tp_id) in dp.tables().iter().enumerate() {
+        let tp = self.get_page::<TablePage>(tp_id);
+        if tp.name() == name {
+          if self.has_foreign_link_to(tp_id) { return Err(AlterTableWithForeignLink(name)); }
+          let tables = dp.tables.as_mut_ptr();
+          tables.add(idx).swap(tables.add(dp.table_num as usize - 1));
+          dp.table_num -= 1;
+          tp.cols().iter().filter(|ci| ci.index != !0).for_each(|ci| self.drop_index_impl(ci.pr()));
+          let mut cur = tp.next;
+          loop {
+            // both TablePage and DataPage use [1] as next, [0] as prev
+            let nxt = self.get_page::<(u32, u32)>(cur).1;
+            self.dealloc_page(cur);
+            cur = nxt;
+            if cur == tp_id { break; }
+          }
+          return Ok(());
+        }
       }
-      Ok(())
+      Err(NoSuchTable(name))
     }
   }
 
-  pub unsafe fn has_foreign_link_to(&mut self, ti: &TableInfo) -> bool {
-    let dp = self.dp();
-    let id = ti.idx(&dp.tables) as u8;
-    for ti in dp.tables() {
-      let tp = self.get_page::<TablePage>(ti.meta);
-      for ci in tp.cols() {
-        if ci.foreign_table == id { return true; }
+  pub unsafe fn has_foreign_link_to(&mut self, tp_id: u32) -> bool {
+    for &tp_id1 in self.dp().tables() {
+      for ci in self.get_page::<TablePage>(tp_id1).cols() {
+        if ci.foreign_table == tp_id { return true; }
       }
     }
     false
@@ -278,8 +263,11 @@ impl Db {
 
   // for convenience, the index of TablePage is returned (because it cannot be obtained by `idx`)
   pub unsafe fn get_tp<'a, 'b>(&mut self, table: &'b str) -> Result<'b, (u32, &'a mut TablePage)> {
-    let page = self.dp().get_ti(table)?.meta;
-    Ok((page, self.get_page::<TablePage>(page)))
+    for &tp_id in self.dp().tables() {
+      let tp = self.get_page::<TablePage>(tp_id);
+      if tp.name() == table { return Ok((tp_id, tp)); }
+    }
+    Err(NoSuchTable(table))
   }
 
   pub unsafe fn allocate_data_slot(&mut self, tp_id: u32) -> Rid {

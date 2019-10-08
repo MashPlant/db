@@ -224,7 +224,7 @@ pub(crate) mod macros {
   #[macro_export]
   macro_rules! handle_all {
     ($ty: expr, $handle: ident) => {
-      match $ty { Int => $handle!(Int), Bool => $handle!(Bool), Float => $handle!(Float), VarChar => $handle!(VarChar), Date => $handle!(Date) }
+      match $ty { Bool => $handle!(Bool), Int => $handle!(Int), Float => $handle!(Float), VarChar => $handle!(VarChar), Date => $handle!(Date) }
     };
   }
 }
