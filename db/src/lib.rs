@@ -6,6 +6,8 @@ pub mod show;
 
 pub use crate::{db::*, iter::*, show::*};
 
+use regex::Regex;
+
 use common::{*, Error::*, BareTy::*};
 use chrono::NaiveDate;
 use physics::ColInfo;
@@ -45,4 +47,10 @@ pub unsafe fn ptr2lit(data: *const u8, ci_id: u32, ci: &ColInfo) -> CLit {
     Date => Lit::Date(*(ptr as *const NaiveDate)),
     VarChar => Lit::Str(str_from_db(ptr)),
   })
+}
+
+pub unsafe fn like2re(like: &str) -> Result<Regex> {
+  // todo: escape
+  let re = regex::escape(like).replace('%', ".*").replace('_', ".");
+  Regex::new(&re).map_err(|reason| InvalidLike { like, reason: Box::new(reason) })
 }

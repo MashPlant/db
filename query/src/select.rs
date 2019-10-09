@@ -1,5 +1,5 @@
 use unchecked_unwrap::UncheckedUnwrap;
-use csv::Writer;
+use std::fmt::Write;
 
 use common::{*, BareTy::*, Error::*, AggOp::*};
 use syntax::ast::*;
@@ -97,37 +97,45 @@ impl SelectResult<'_> {
     self.data.len() / self.cols.len()
   }
 
-  // I have checked the implementation of `csv`, and I am sure that no error can occur, so use `unchecked_unwrap` everywhere
   pub fn csv(&self) -> String {
     unsafe {
-      let mut csv = Vec::new();
-      let mut wt = Writer::from_writer(&mut csv);
+      let mut csv = String::new();
+      let mut first = true;
       for &Col { op, ci, .. } in &self.cols {
+        if !first { csv.push(','); }
+        first = false;
         if let Some(ci) = ci {
-          if let Some(op) = op {
-            wt.write_field(format!("{}({})", op.name(), ci.name())).unchecked_unwrap();
-          } else {
-            wt.write_field(ci.name()).unchecked_unwrap();
-          }
+          let name = ci.name();
+          if let Some(op) = op { write!(csv, "{}({})", op.name(), name).unchecked_unwrap(); } else { csv += name; }
         } else {
           debug_assert!(op == Some(CountAll));
-          wt.write_field("count(*)").unchecked_unwrap();
+          csv += "count(*)";
         }
       }
-      wt.write_record(None::<&[u8]>).unchecked_unwrap();
+      csv.push('\n');
       for i in 0..self.row_count() {
         let row = self.data.get_unchecked(i * self.cols.len()..(i + 1) * self.cols.len());
+        let mut first = true;
         for lit in row {
+          if !first { csv.push(','); }
+          first = false;
           match lit.lit() { // some tiny modifications to Lit's `debug` method
-            Lit::Null => {} // `debug` will print "null"
-            Lit::Str(s) => wt.write_field(s).unchecked_unwrap(), // `debug` will add '' around the string
-            _ => wt.write_field(format!("{:?}", lit)).unchecked_unwrap(),
+            Lit::Null => {}
+            Lit::Str(s) => {
+              csv.reserve(s.len() + 2);
+              csv.push('"');
+              for ch in s.chars() {
+                if ch == '"' { csv.push('"'); } // csv format, "" to escape "
+                csv.push(ch);
+              }
+              csv.push('"');
+            }
+            _ => write!(csv, "{:?}", lit).unchecked_unwrap(),
           }
         }
-        wt.write_record(None::<&[u8]>).unchecked_unwrap();
+        csv.push('\n');
       }
-      drop(wt);
-      String::from_utf8_unchecked(csv)
+      csv
     }
   }
 }

@@ -3,6 +3,7 @@ use std::{borrow::Cow, fs};
 use common::{*, Error::*};
 use syntax::ast::*;
 use db::{Db, show::show_db};
+use query::SelectResult;
 
 #[derive(Default)]
 pub struct Eval {
@@ -50,6 +51,10 @@ impl Eval {
       &CreateIndex { table, col } => (index::create(self.db()?, table, col)?, "".into()).1,
       &DropIndex { table, col } => (self.db()?.drop_index(table, col)?, "".into()).1
     })
+  }
+
+  pub fn select<'a, 'b>(&'b self, s: &Select<'a>) -> Result<'a, SelectResult<'b>> {
+    query::select(s, self.db.as_ref().ok_or(NoDbInUse)?)
   }
 
   fn db<'a>(&mut self) -> Result<'a, &mut Db> { self.db.as_mut().ok_or(NoDbInUse) }

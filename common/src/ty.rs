@@ -38,7 +38,7 @@ impl ColTy {
 pub enum Lit<'a> { Null, Bool(bool), Number(f64), Date(NaiveDate), Str(&'a str) }
 
 // the discriminant of Lit
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum LitTy { Null, Bool, Number, Date, Str }
 
 impl Lit<'_> {
@@ -140,5 +140,14 @@ pub enum BinOp { Add, Sub, Mul, Div, Mod }
 impl BinOp {
   pub fn name(self) -> char {
     match self { BinOp::Add => '+', BinOp::Sub => '-', BinOp::Mul => '*', BinOp::Div => '/', BinOp::Mod => '%' }
+  }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum CmpOp { Lt, Le, Ge, Gt, Eq, Ne }
+
+impl CmpOp {
+  pub fn name(self) -> &'static str {
+    match self { CmpOp::Lt => "<", CmpOp::Le => "<=", CmpOp::Ge => ">=", CmpOp::Gt => ">", CmpOp::Eq => "==", CmpOp::Ne => "!=" }
   }
 }

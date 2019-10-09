@@ -56,23 +56,23 @@ impl Db {
       // its V will be used later to validate col cons, only allow one primary / foreign / check for one col
       let mut cols = IndexMap::default();
       for co in &c.cols {
-        if cols.insert(co.name, (false, false, false)).is_some() { return Err(DupCol(co.name)); }
+        if cols.insert(co.name, (false, false, false, false)).is_some() { return Err(DupCol(co.name)); }
         if co.name.len() >= MAX_COL_NAME { return Err(ColNameTooLong(co.name)); }
       }
 
       // validate col cons
       let mut primary_cnt = 0;
       for cons in &c.cons {
-        if let Some((idx, _, has_pfc)) = cols.get_full_mut(cons.name) {
+        if let Some((idx, _, has_pfuc)) = cols.get_full_mut(cons.name) {
           match &cons.kind {
             TableConsKind::Primary => {
-              if has_pfc.0 { return Err(DupPrimary(cons.name)); }
-              has_pfc.0 = true;
+              if has_pfuc.0 { return Err(DupPrimary(cons.name)); }
+              has_pfuc.0 = true;
               primary_cnt += 1;
             }
             &TableConsKind::Foreign { table, col } => {
-              if has_pfc.1 { return Err(DupForeign(cons.name)); }
-              has_pfc.1 = true;
+              if has_pfuc.1 { return Err(DupForeign(cons.name)); }
+              has_pfuc.1 = true;
               let ci = self.get_tp(table)?.1.get_ci(col)?;
               if !ci.flags.contains(ColFlags::UNIQUE) { return Err(ForeignKeyOnNonUnique(col)); }
               let (f_ty, ty) = (ci.ty, c.cols[idx].ty);
@@ -83,9 +83,13 @@ impl Db {
                 _ => return Err(IncompatibleForeignTy { foreign: f_ty, own: ty }),
               }
             }
+            TableConsKind::Unique => {
+              if has_pfuc.2 { return Err(DupUnique(cons.name)); }
+              has_pfuc.2 = true;
+            }
             TableConsKind::Check(check) => {
-              if has_pfc.2 { return Err(DupCheck(cons.name)); }
-              has_pfc.2 = true;
+              if has_pfuc.3 { return Err(DupCheck(cons.name)); }
+              has_pfuc.3 = true;
               let ty = c.cols[idx].ty;
               let sz = ty.size() as usize;
               if check.len() * sz >= MAX_CHECK_BYTES { return Err(CheckTooLong(cons.name, check.len())); }
@@ -136,6 +140,7 @@ impl Db {
             ci.foreign_table = f_tp_id;
             ci.foreign_col = f_ci_id as u8;
           }
+          TableConsKind::Unique => ci.flags.set(ColFlags::UNIQUE, true),
           TableConsKind::Check(check) => {
             let (id, cp) = self.alloc_page::<CheckPage>();
             ci.check = id;
@@ -153,7 +158,6 @@ impl Db {
 
       *dp.tables.get_unchecked_mut(dp.table_num as usize) = id;
       dp.table_num += 1;
-
       tp.cols().iter()
         .filter(|ci| ci.flags.contains(ColFlags::UNIQUE))
         .for_each(|ci| self.alloc_index(ci.pr()));

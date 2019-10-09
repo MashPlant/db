@@ -17,23 +17,38 @@ fn index() {
     let mut e = Eval::default();
     let mut map = BTreeSet::new();
     let rid; // init later
+    macro_rules! ins {
+      () => {
+        e.exec(&Stmt::Insert(Insert { table: "test", vals: ins.iter().map(|x| vec![lit(*x)]).collect() })).unwrap();
+        for (idx, &ins) in ins.iter().enumerate() {
+          map.insert((ins, idx as i32));
+        }
+      };
+    }
+    macro_rules! del {
+      ($range: expr) => {
+        for &d in &del[$range] {
+          e.exec(&Stmt::Delete(Delete { table: "test", where_: vec![Cond::Cmp(CmpOp::Eq, ColRef { table: None, col: "id" }, Atom::Lit(lit(d)))] })).unwrap();
+          let rm = map.range((&(d, 0))..(&(d, N as i32))).cloned().collect::<Vec<_>>();
+          for x in rm { map.remove(&x); }
+        }
+      };
+    }
     macro_rules! test {
       () => {
         unsafe { Index::<{Int}>::new(e.db.as_mut().unwrap(), rid).debug_check_all(); }
         for &t in &test {
-          let index_count = e.exec(&Stmt::Select(Select {
+          let index_count = e.select(&Select {
             ops: None,
             tables: vec!["test"],
             where_: vec![Cond::Cmp(CmpOp::Eq, ColRef { table: None, col: "id" }, Atom::Lit(lit(t)))],
-          })).unwrap().lines().count() - 1; // csv, ignore first line
+          }).unwrap().row_count();
           let map_count = map.range((&(t, 0))..(&(t, N as i32))).count();
           assert_eq!(index_count, map_count);
         }
       };
     }
-    for x in &mut ins {
-      *x = rng.gen_range(0, max as i32);
-    }
+    for x in &mut ins { *x = rng.gen_range(0, max as i32); }
     (del.copy_from_slice(&ins), del.shuffle(&mut rng));
     (test.copy_from_slice(&ins), test.shuffle(&mut rng));
     e.exec(&Stmt::CreateDb("test")).unwrap();
@@ -47,18 +62,13 @@ fn index() {
       rid = Rid::new(tp_id, ci.idx(&tp.cols));
       db.get_page::<IndexPage>(ci.index).cap = 8;
     }
-    e.exec(&Stmt::Insert(Insert { table: "test", vals: ins.iter().map(|x| vec![lit(*x)]).collect() })).unwrap();
-    for (idx, &ins) in ins.iter().enumerate() {
-      map.insert((ins, idx as i32));
-    }
+    ins!();
     test!();
-    for (_idx, &d) in del[0..N / 2].iter().enumerate() {
-      e.exec(&Stmt::Delete(Delete { table: "test", where_: vec![Cond::Cmp(CmpOp::Eq, ColRef { table: None, col: "id" }, Atom::Lit(lit(d)))] })).unwrap();
-      let rm = map.range((&(d, 0))..(&(d, N as i32))).cloned().collect::<Vec<_>>();
-      for x in rm {
-        map.remove(&x);
-      }
-    }
+    del!(..N / 2);
+    test!();
+    del!(N / 2..);
+    test!();
+    ins!();
     test!();
     e.exec(&Stmt::DropDb("test")).unwrap();
   }

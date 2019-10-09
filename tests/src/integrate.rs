@@ -80,42 +80,100 @@ fn create() {
 fn select() {
   let mut e = Eval::default();
   ok!(e, "use orderDB;");
+
+  err!(e, "select id1 from orders; -- error");
+  err!(e, "select order.id from orders; -- error");
+  err!(e, "select id from orders, customer; -- error, ambiguous col");
+
   ok!(e, "select * from orders;");
   ok!(e, "select * from orders where id is not null;");
   ok!(e, "select * from orders where date0 > '2017-09-26';");
-  let _ = e.exec_all("drop index orders (customer_id);", |_| {}, |_| {});
-  // maybe fail because index doesn't exist yet, but doesn't matter
-  ok!(e, "select * from orders where customer_id=306967;");
+  ok!(e, "select * from customer where name like 'CHAD CA_ELLO';");
+  ok!(e, "select * from customer where name like 'FAUSTO VANNO%';");
+
   ok!(e, "create index orders (customer_id);");
-  ok!(e, "select * from orders where customer_id=306967;");
-  ok!(e, "select * from customer where name like 'chad ca_ello';");
-  ok!(e, "select * from customer where name like 'fausto vanno%';");
-  assert!(e.exec_all("select website_id, avg(price) from price;", |_| {}, |_| {}).is_err());
-  ok!(e, "select avg(price), min(price), max(price), count(price), count(*) from price where price>=60;");
-  ok!(e, "select *
-from orders, customer, website
-where website.id=orders.website_id and customer.id=orders.customer_id and orders.quantity > 5;");
+  ok!(e, "select * from orders where customer_id < 300002;");
+  ok!(e, "select * from orders where customer_id <= 300002;");
+  ok!(e, "select * from orders where customer_id > 306999;");
+  ok!(e, "select * from orders where customer_id >= 306999;");
+  ok!(e, "select * from orders where customer_id = 306967;");
+  ok!(e, "drop index orders (customer_id);");
+
+  err!(e, "select website_id, avg(price) from price; -- error, mixed select");
+  ok!(e, "select avg(price) from price where price >= 60;");
+  ok!(e, "select min(price) from price where price >= 60;");
+
+  ok!(e, "select * from orders, customer, website where website.id=orders.website_id and customer.id=orders.customer_id and orders.quantity > 5;");
+}
+
+fn insert() {
+  let mut e = Eval::default();
+  ok!(e, "use orderDB;");
+
+  err!(e, "insert into orders values (1, 1001, 300001, 200001, '2014-09-30', 5, 'more'); -- error");
+  err!(e, "insert into orders values (1, 1001, 300001, 200001, 'less'); -- error");
+
+  err!(e, "insert into orders values (1, 1001, 300001, 200001, '2014-09-31', 5); -- error, illegal date");
+  err!(e, "insert into orders values (1, 1000, 300001, 200001, '2014-09-30', 5); -- error, no such website");
+  err!(e, "insert into orders values (1, 1001, 3000000, 200001, '2014-09-30', 5); -- error, no such customer");
+  ok!(e, "insert into orders values (1, 1001, 300001, 200001, '2014-09-30', 5);");
+  err!(e, "insert into orders values (1, 1001, 300001, 200001, '2014-09-30', 5); -- error, duplicate id");
+  err!(e, "insert into customer values (1, 'name', 'x'); -- error, not in check list");
+  ok!(e, "delete from orders where id = 1;");
+  err!(e, "insert into price values (1002, 249932, 9999); -- error, dup composite primary key");
+  ok!(e, "insert into price values (1003, 249932, 9999);");
+  ok!(e, "delete from price where price = 9999;");
+
+  ok!(e, "create table test (i int, b bool, f float, v varchar(10), d date); -- have all data types");
+  ok!(e, "insert into test values (19260817, false, 19260817.0, 'hello', '2019-10-01');");
+  ok!(e, "select * from test where i = 19260817 and b = false and f = 19260817.0 and v = 'hello' and d = '2019-10-01';");
+  ok!(e, "select * from test where i = f and b = b and f = i and v = v and d = d;");
+  ok!(e, "create table test1 (i int, b bool, f float, v varchar(10), d date);");
+  ok!(e, "insert into test1 values (19260817, false, 19260817.0, 'hello', '2019-10-01');");
+  ok!(e, "select * from test, test1 where test.i = test1.f and test.b = test1.b and test.f = test1.i and test.v = test1.v and test.d = test1.d;");
+  ok!(e, "drop table test;");
+  ok!(e, "drop table test1;");
 }
 
 fn update() {
   let mut e = Eval::default();
   ok!(e, "use orderDB;");
-  ok!(e, "update orders set id = -id;");
-  ok!(e, "select * from orders where id < 0;");
-  ok!(e, "update orders set id = -id where id < 0;");
-  ok!(e, "select * from orders where id > 0;");
+
+  err!(e, "update orders set id1 = 1; -- error");
+  err!(e, "update orders set id = 1 where id1 = 1; -- error");
+  err!(e, "update orders set id = 1 where order.id = 1; -- error");
+
+  ok!(e, "update orders set id = -id where id > 150000;");
+  ok!(e, "update orders set id = -id where id < -150000;");
+
   err!(e, "update customer set id = -id; -- error, there are foreign link to customer");
   err!(e, "update orders set id = 0; -- error, dup primary key (one update will success)");
   err!(e, "update orders set id = book_id + website_id / (customer_id - customer_id); -- error, div 0 gives null, id is notnull");
+
   ok!(e, "update orders set id = id + 1 - 2 * 3 / 4 % 5; -- note that / is fdiv, % is fmod");
+
+  ok!(e, "create table test(i int, v varchar(10), b bool, primary key (v, b), unique(i));");
+  ok!(e, "insert into test values (1, 'hello', true);");
+  ok!(e, "update test set b = i < 0 and v like 'he_lo';");
+  ok!(e, "update test set b = i < 0 or v like 'he_lo';");
+  ok!(e, "update test set b = i is not null and v is not null; -- now the only key in test is (1, 'hello', true)");
+  ok!(e, "insert into test values (2, 'hello', false);");
+  err!(e, "update test set i = 1 where i = 2; -- error, dup i");
+  err!(e, "update test set b = true where i = 2; -- error, dup composite primary key");
+  ok!(e, "drop table test;");
 }
 
 fn delete() {
   let mut e = Eval::default();
   ok!(e, "use orderDB;");
+
+  err!(e, "delete from orders where id1 > 0; -- error");
+  err!(e, "delete from orders where order.id > 0; -- error");
+
   ok!(e, "select count(*) from orders;");
   ok!(e, "delete from orders where id > 150000;");
   ok!(e, "select count(*) from orders;");
+
   err!(e, "delete from customer; -- error, there are foreign link to customer");
 }
 
@@ -136,28 +194,6 @@ fn errors() {
   ok!(e, "CREATE TABLE t1 (id DATE, CHECK (id) IN ('2019-01-01')); -- ok");
 }
 
-fn insert() {
-  let mut e = Eval::default();
-  ok!(e, "use orderDB; -- ok");
-  err!(e, "insert into orders values (1,1001,300001,200001,'2014-09-31',5); -- illegal date");
-  err!(e, "insert into orders values (1,1000,300001,200001,'2014-09-30',5); -- no such website");
-  err!(e, "insert into orders values (1,1001,3000000,200001,'2014-09-30',5); -- no such customer");
-  ok!(e, "insert into orders values (1,1001,300001,200001,'2014-09-30',5); -- ok");
-  err!(e, "insert into orders values (1,1001,300001,200001,'2014-09-30',5); -- duplicate id");
-  err!(e, "insert into customer values (1, 'name', 'x'); -- not in check list");
-  ok!(e, "delete from orders where id = 1; -- ok, remove the previously inserted value");
-  err!(e, "insert into price values (1002,249932,9999); -- dup composite primary key");
-  ok!(e, "insert into price values (1003,249932,9999); -- ok");
-  ok!(e, "delete from price where price = 9999; -- ok, remove the previously inserted value");
-  ok!(e, r#"create table test (i int, b bool, f float, v varchar(10), d date); -- have all data types
-insert into test values (19260817, false, 19260817.0, 'hello', '2019-10-01');
-select * from test where i = 19260817 and b = false and f = 19260817.0 and v = 'hello' and d = '2019-10-01';
-select * from test where i = f and b = b and f = i and v = v and d = d;
-create table test1 (i int, b bool, f float, v varchar(10), d date);
-insert into test1 values (19260817, false, 19260817.0, 'hello', '2019-10-01');
-select * from test, test1 where test.i = test1.f and test.b = test1.b and test.f = test1.i and test.v = test1.v and test.d = test1.d;"#);
-}
-
 #[test]
 fn integrate() {
   create();
@@ -166,5 +202,5 @@ fn integrate() {
   insert();
   update();
   delete();
-  Eval::default().exec_all(DROP, |_| {}, |_| {}).unwrap();
+  ok!(Eval::default(), DROP);
 }

@@ -1,5 +1,8 @@
 # only for test
 
+.PHONY: test
+.PHONY: create
+
 BROWSER := firefox-nightly
 
 test:

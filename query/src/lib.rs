@@ -1,4 +1,5 @@
 #![feature(ptr_offset_from)]
+#![feature(box_patterns)]
 
 pub mod insert;
 pub mod delete;

@@ -1,5 +1,6 @@
 #![allow(incomplete_features)]
 #![feature(const_generics)]
+#![feature(ptr_offset_from)]
 
 use std::{ptr::{self, NonNull}, marker::PhantomData, cmp::Ordering};
 

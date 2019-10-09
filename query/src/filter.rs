@@ -1,8 +1,8 @@
 use unchecked_unwrap::UncheckedUnwrap;
 use std::borrow::Borrow;
 
-use common::{*, BareTy::*};
-use syntax::ast::{*, CmpOp::*};
+use common::{*, BareTy::*, CmpOp::*};
+use syntax::ast::*;
 use physics::*;
 use db::{Db, fill_ptr};
 use index::{Index, handle_all};

@@ -1,7 +1,7 @@
 use chrono::NaiveDate;
 
-use common::{*, Error::*, BareTy::*};
-use syntax::ast::{*, CmpOp::*};
+use common::{*, Error::*, BareTy::*, CmpOp::*};
+use syntax::ast::*;
 use physics::*;
 use crate::is_null;
 
@@ -14,8 +14,8 @@ macro_rules! handle_op {
   };
 }
 
-// the pointer from IndexPage cannot be passed to predicate! It is just the data ptr, while all these predicate accept
-// the pointer to the start address of the whole data slot
+// the pointer from IndexPage cannot be passed to predicate!
+// It is just the data ptr, but all these predicate accept the pointer to the beginning of the whole data slot
 
 // assume both lhs and rhs belongs to tp's table, so ColRef::table is not checked
 pub unsafe fn one_predicate<'a>(e: &Cond<'a>, tp: &TablePage) -> Result<'a, Box<dyn Fn(*const u8) -> bool>> {
@@ -68,11 +68,8 @@ pub unsafe fn one_predicate<'a>(e: &Cond<'a>, tp: &TablePage) -> Result<'a, Box<
     Cond::Null(_, null) => Ok(if null { Box::new(move |p| is_null(p, l_id as u32)) } else { Box::new(move |p| !is_null(p, l_id as u32)) }),
     Cond::Like(_, like) => {
       if l.ty.ty != VarChar { return Err(InvalidLikeTy(l.ty.ty)); }
-      let re = regex::escape(like).replace('%', ".*").replace('_', ".");
-      match regex::Regex::new(&re) {
-        Ok(re) => Ok(Box::new(move |p| !is_null(p, l_id as u32) && re.is_match(str_from_db(p.add(l_off as usize))))),
-        Err(reason) => Err(InvalidLike { like, reason: Box::new(reason) }),
-      }
+      let re = db::like2re(like)?;
+      Ok(Box::new(move |p| !is_null(p, l_id as u32) && re.is_match(str_from_db(p.add(l_off as usize)))))
     }
   }
 }
@@ -96,12 +93,12 @@ pub unsafe fn cross_predicate<'a>(op: CmpOp, col: (&ColInfo, &ColInfo), tp: (&Ta
   }
 }
 
-pub unsafe fn one_where<'a>(where_: &[Cond<'a>], table: &str, tp: &TablePage) -> Result<'a, impl Fn(*const u8) -> bool> {
+pub unsafe fn one_where<'a>(where_: &[Cond<'a>], tp: &TablePage) -> Result<'a, impl Fn(*const u8) -> bool> {
   let mut preds = Vec::with_capacity(where_.len());
   for cond in where_ {
     let (l, r) = (cond.lhs_col(), cond.rhs_col());
-    if let Some(t) = l.table { if t != table { return Err(NoSuchTable(t)); } }
-    if let Some(&ColRef { table: Some(t), .. }) = r { if t != table { return Err(NoSuchTable(t)); } }
+    if let Some(t) = l.table { if t != tp.name() { return Err(NoSuchTable(t)); } }
+    if let Some(&ColRef { table: Some(t), .. }) = r { if t != tp.name() { return Err(NoSuchTable(t)); } }
     // table name is checked before, col name & type & value format/size all checked in one_predicate
     preds.push(one_predicate(cond, tp)?);
   }

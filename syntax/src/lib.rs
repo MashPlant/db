@@ -1,5 +1,5 @@
 #![feature(proc_macro_hygiene)]
-
+#![feature(box_patterns)]
 pub mod ast;
 pub mod parser;
 

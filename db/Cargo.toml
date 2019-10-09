@@ -11,3 +11,4 @@ syntax = { path = "../syntax" }
 memmap = "0.7.0"
 chrono = "0.4"
 unchecked_unwrap = "1.0.1"
+regex = "1"

@@ -31,11 +31,15 @@ impl<const T: BareTy> Cmp<{ T }> {
 // return the first index `i` that the `i`th element is the first element > `x` (in the sense of `cmp_full`)
 // if caller can guarantee `x` exists in `ip`, and the elements in `ip` are strictly ascending, then the `i - 1`th element the only element == `x`
 pub unsafe fn upper_bound<const T: BareTy>(ip: &IndexPage, x: *const u8) -> usize {
-  let (mut i, count) = (0, ip.count as usize);
   let (slot_size, rid_off) = (ip.slot_size() as usize, ip.rid_off as usize);
-  while i < count {
-    if Cmp::<{ T }>::cmp_full(x, ip.data.as_ptr().add(i * slot_size), rid_off) == Ordering::Less { break; }
-    i += 1;
+  let (mut i, mut last) = (0, ip.count as isize - 1); // count may be 0, usize may overflow
+  while i <= last {
+    let mid = (i + last) >> 1;
+    if Cmp::<{ T }>::cmp_full(x, ip.data.as_ptr().add(mid as usize * slot_size), rid_off) == Ordering::Less {
+      last = mid - 1;
+    } else {
+      i = mid + 1;
+    }
   }
-  i
+  i as usize
 }

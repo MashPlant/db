@@ -10,8 +10,8 @@ pub fn delete<'a>(d: &Delete<'a>, db: &mut Db) -> Result<'a, String> {
   unsafe {
     let (tp_id, tp) = db.get_tp(d.table)?;
     if db.has_foreign_link_to(tp_id) { return Err(AlterTableWithForeignLink(d.table)); }
-    let pred = one_where(&d.where_, d.table, tp)?;
-    let mut del_num = 0;
+    let pred = one_where(&d.where_, tp)?;
+    let mut del_num = 0u32;
     filter(db.pr(), &d.where_, tp_id, tp.pr(), pred, |data, rid| {
       del_num += 1;
       for (idx, ci) in tp.cols().iter().enumerate() {

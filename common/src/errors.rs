@@ -1,4 +1,4 @@
-use crate::{MAGIC_LEN, ColTy, BareTy, LitTy, CLit, AggOp, BinOp};
+use crate::{MAGIC_LEN, ColTy, BareTy, LitTy, CLit, AggOp, BinOp, CmpOp};
 
 #[derive(Debug)]
 pub struct ParserError<'a> {
@@ -41,11 +41,12 @@ pub enum Error<'a> {
   InvalidDate { date: &'a str, reason: chrono::ParseError },
   InvalidLike { like: &'a str, reason: Box<regex::Error> },
   InvalidLikeTy(BareTy),
+  InvalidLikeTy1(LitTy),
   IncompatibleForeignTy { foreign: ColTy, own: ColTy },
   RecordTyMismatch { expect: BareTy, actual: BareTy },
   RecordLitTyMismatch { expect: BareTy, actual: LitTy },
   InsertLenMismatch { expect: u8, actual: usize },
-  // put stands for insert or update`
+  // Put stands for Insert or Update
   PutStrTooLong { limit: u8, actual: usize },
   PutNullOnNotNull,
   PutDupOnUniqueKey { col: &'a str, val: CLit<'a> },
@@ -53,8 +54,10 @@ pub enum Error<'a> {
   PutNotInCheck { col: &'a str, val: CLit<'a> },
   PutDupCompositePrimaryKey,
   AmbiguousCol(&'a str),
+  // below 4 are duplicate constraint on one col in creating
   DupPrimary(&'a str),
   DupForeign(&'a str),
+  DupUnique(&'a str),
   DupCheck(&'a str),
   CheckNull(&'a str),
   CheckTooLong(&'a str, usize),
@@ -64,6 +67,8 @@ pub enum Error<'a> {
   Div0,
   Mod0,
   IncompatibleBin { op: BinOp, ty: LitTy },
+  IncompatibleCmp { op: CmpOp, l: LitTy, r: LitTy },
+  IncompatibleLogic(LitTy),
   IO(std::io::Error),
 }
 

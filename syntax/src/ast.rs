@@ -83,6 +83,7 @@ pub struct TableCons<'a> {
 pub enum TableConsKind<'a> {
   Primary,
   Foreign { table: &'a str, col: &'a str },
+  Unique,
   Check(Vec<CLit<'a>>),
 }
 
@@ -94,11 +95,17 @@ pub enum Cond<'a> {
   Like(ColRef<'a>, &'a str),
 }
 
-// this is pure arithmetic expr, only appears in the set list of update, not in where list of select and delete
+// this is arithmetic expr, only appears in the set list of update, not in where list of select and delete
+// Cond is a proper subset of Expr
 pub enum Expr<'a> {
   Atom(Atom<'a>),
+  Null(Box<Expr<'a>>, bool),
+  Like(Box<Expr<'a>>, &'a str),
   Neg(Box<Expr<'a>>),
-  Bin(BinOp, Box<Expr<'a>>, Box<Expr<'a>>),
+  And(Box<(Expr<'a>, Expr<'a>)>),
+  Or(Box<(Expr<'a>, Expr<'a>)>),
+  Cmp(CmpOp, Box<(Expr<'a>, Expr<'a>)>),
+  Bin(BinOp, Box<(Expr<'a>, Expr<'a>)>),
 }
 
 impl<'a> Cond<'a> {
@@ -108,15 +115,6 @@ impl<'a> Cond<'a> {
 
   pub fn rhs_col(&self) -> Option<&ColRef<'a>> {
     match self { Cond::Cmp(_, _, Atom::ColRef(r)) => Some(r), _ => None }
-  }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum CmpOp { Lt, Le, Ge, Gt, Eq, Ne }
-
-impl CmpOp {
-  pub fn name(self) -> &'static str {
-    match self { CmpOp::Lt => "<", CmpOp::Le => "<=", CmpOp::Ge => ">=", CmpOp::Gt => ">", CmpOp::Eq => "==", CmpOp::Ne => "!=" }
   }
 }
 
@@ -160,8 +158,8 @@ impl fmt::Debug for Cond<'_> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match self {
       Cond::Cmp(op, l, r) => write!(f, "{:?} {} {:?}", l, op.name(), r),
-      Cond::Null(c, null) => write!(f, "{:?} is {}null", c, if *null { "" } else { "not " }),
-      Cond::Like(c, s) => write!(f, "{:?} like '{}'", c, s),
+      Cond::Null(x, null) => write!(f, "{:?} is {}null", x, if *null { "" } else { "not " }),
+      Cond::Like(x, like) => write!(f, "{:?} like '{}'", x, like),
     }
   }
 }
@@ -170,8 +168,11 @@ impl fmt::Debug for Expr<'_> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match self {
       Expr::Atom(x) => write!(f, "{:?}", x),
+      Expr::Null(x, null) => write!(f, "({:?}) is {}null", x, if *null { "" } else { "not " }),
+      Expr::Like(x, like) => write!(f, "({:?}) like '{}'", x, like),
       Expr::Neg(x) => write!(f, "-({:?})", x),
-      Expr::Bin(op, l, r) => write!(f, "({:?}) {} ({:?})", l, op.name(), r)
+      Expr::And(box (l, r)) => write!(f, "({:?}) and ({:?})", l, r), Expr::Or(box (l, r)) => write!(f, "({:?}) or ({:?})", l, r),
+      Expr::Cmp(op, box (l, r)) => write!(f, "({:?}) {} ({:?})", l, op.name(), r), Expr::Bin(op, box (l, r)) => write!(f, "({:?}) {} ({:?})", l, op.name(), r),
     }
   }
 }

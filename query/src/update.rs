@@ -1,38 +1,58 @@
 use unchecked_unwrap::UncheckedUnwrap;
+use regex::Regex;
+use std::cmp::Ordering::*;
 
-use common::{*, Error::*, BinOp::*, BareTy::*};
+use common::{*, Error::*, BinOp::*, CmpOp::*, BareTy::*};
 use syntax::ast::*;
 use physics::*;
 use db::{Db, fill_ptr, ptr2lit};
 use index::{Index, handle_all};
 use crate::{is_null, predicate::one_where, filter::filter, InsertCtx};
 
-unsafe fn check<'a>(e: &Expr<'a>, tp: &mut TablePage, table: &str) -> Result<'a, LitTy> {
+unsafe fn check<'a>(e: &Expr<'a>, tp: &mut TablePage, re_cache: &mut HashMap<&'a str, Regex>) -> Result<'a, LitTy> {
   match e {
     Expr::Atom(x) => Ok(match x {
       Atom::Lit(x) => x.lit().ty(),
       Atom::ColRef(col) => {
-        if let Some(t) = col.table { if t != table { return Err(NoSuchTable(t)); } }
+        if let Some(t) = col.table { if t != tp.name() { return Err(NoSuchTable(t)); } }
         let ci = tp.get_ci(col.col)?;
         match ci.ty.ty { Bool => LitTy::Bool, Int | Float => LitTy::Number, Date => LitTy::Date, VarChar => LitTy::Str }
       }
     }),
+    Expr::Null(x, _) => {
+      check(x, tp, re_cache)?;
+      Ok(LitTy::Bool)
+    }
+    Expr::Like(x, like) => {
+      match check(x, tp, re_cache)? { LitTy::Str => {} ty => return Err(InvalidLikeTy1(ty)) };
+      re_cache.insert(like, db::like2re(like)?);
+      Ok(LitTy::Bool)
+    }
     Expr::Neg(x) => {
-      match check(x, tp, table)? { LitTy::Number => {} ty => return Err(IncompatibleBin { op: Sub, ty }) };
+      match check(x, tp, re_cache)? { LitTy::Number => {} ty => return Err(IncompatibleBin { op: Sub, ty }) };
       Ok(LitTy::Number)
     }
-    Expr::Bin(op, l, r) => {
-      let op = *op;
-      match check(l, tp, table)? { LitTy::Number => {} ty => return Err(IncompatibleBin { op, ty }) };
-      match check(r, tp, table)? { LitTy::Number => {} ty => return Err(IncompatibleBin { op, ty }) };
+    Expr::And(box (l, r)) | Expr::Or(box (l, r)) => {
+      match check(l, tp, re_cache)? { LitTy::Bool => {} ty => return Err(IncompatibleLogic(ty)) };
+      match check(r, tp, re_cache)? { LitTy::Bool => {} ty => return Err(IncompatibleLogic(ty)) };
+      Ok(LitTy::Bool)
+    }
+    Expr::Cmp(op, box (l, r)) => {
+      let (l, r) = (check(l, tp, re_cache)?, check(r, tp, re_cache)?);
+      if l == r { Ok(LitTy::Bool) } else { Err(IncompatibleCmp { op: *op, l, r }) }
+    }
+    Expr::Bin(op, box (l, r)) => {
+      match check(l, tp, re_cache)? { LitTy::Number => {} ty => return Err(IncompatibleBin { op: *op, ty }) };
+      match check(r, tp, re_cache)? { LitTy::Number => {} ty => return Err(IncompatibleBin { op: *op, ty }) };
       Ok(LitTy::Number)
     }
   }
 }
 
-// if one of the operand is null, the result is null
+// if one of the operand is null, the result is null (including comparison, e.g., (null = null) evaluates to null, instead of false in select)
+// the only exception is "is (not) null" check, it always return bool
 // if div0 or mod0 occurs, the result is null (that is how sqlite behaves)
-unsafe fn eval<'a>(e: &Expr<'a>, tp: &mut TablePage, data: *const u8) -> Lit<'a> {
+unsafe fn eval<'a>(e: &Expr<'a>, tp: &mut TablePage, data: *const u8, re_cache: &HashMap<&'a str, Regex>) -> Lit<'a> {
   match e {
     Expr::Atom(x) => match x {
       Atom::Lit(x) => *x,
@@ -42,15 +62,38 @@ unsafe fn eval<'a>(e: &Expr<'a>, tp: &mut TablePage, data: *const u8) -> Lit<'a>
         ptr2lit(data, ci_id, ci)
       }
     }.lit(),
+    Expr::Null(x, null) => {
+      let x = eval(x, tp, data, re_cache);
+      Lit::Bool(x.is_null() == *null)
+    }
+    Expr::Like(x, like) => {
+      let re = re_cache.get(like).unchecked_unwrap();
+      let x = match eval(x, tp, data, re_cache) { Lit::Str(x) => x, _ => return Lit::Null };
+      Lit::Bool(re.is_match(x))
+    }
     Expr::Neg(x) => {
       // since we cannot have type mismatch here, if it is not Number, it can only be Null
-      let x = match eval(x, tp, data) { Lit::Number(x) => x, _ => return Lit::Null };
+      let x = match eval(x, tp, data, re_cache) { Lit::Number(x) => x, _ => return Lit::Null };
       Lit::Number(-x)
     }
-    Expr::Bin(op, l, r) => {
-      let op = *op;
-      let l = match eval(l, tp, data) { Lit::Number(x) => x, _ => return Lit::Null };
-      let r = match eval(r, tp, data) { Lit::Number(x) => x, _ => return Lit::Null };
+    Expr::And(box (l, r)) | Expr::Or(box (l, r)) => {
+      let or = if let Expr::Or(_) = e { true } else { false };
+      let l = match eval(l, tp, data, re_cache) { Lit::Bool(x) => x, _ => return Lit::Null };
+      if or == l { return Lit::Bool(l); } // short circuit, true or _ / false and _
+      // now it is false or _ / true and _, the result only depends on `r`
+      let r = match eval(r, tp, data, re_cache) { Lit::Bool(x) => x, _ => return Lit::Null };
+      Lit::Bool(r)
+    }
+    Expr::Cmp(op, box (l, r)) => {
+      let l = eval(l, tp, data, re_cache);
+      let r = eval(r, tp, data, re_cache);
+      if l.is_null() || r.is_null() { return Lit::Null; };
+      let cmp = l.cmp(&r); // `check` and null check above guarantees they have the same type
+      Lit::Bool(match op { Lt => cmp == Less, Le => cmp != Greater, Ge => cmp != Less, Gt => cmp == Greater, Eq => cmp == Equal, Ne => cmp != Equal })
+    }
+    Expr::Bin(op, box (l, r)) => {
+      let l = match eval(l, tp, data, re_cache) { Lit::Number(x) => x, _ => return Lit::Null };
+      let r = match eval(r, tp, data, re_cache) { Lit::Number(x) => x, _ => return Lit::Null };
       Lit::Number(match op {
         Add => l + r, Sub => l - r, Mul => l * r,
         Div => if r == 0.0 { return Lit::Null; } else { l / r }, Mod => if r == 0.0 { return Lit::Null; } else { l % r },
@@ -62,22 +105,23 @@ unsafe fn eval<'a>(e: &Expr<'a>, tp: &mut TablePage, data: *const u8) -> Lit<'a>
 pub fn update<'a>(u: &Update<'a>, db: &mut Db) -> Result<'a, String> {
   unsafe {
     let mut ctx = InsertCtx::build(db, u.table)?;
-    let pred = one_where(&u.where_, u.table, ctx.tp)?;
+    let pred = one_where(&u.where_, ctx.tp)?;
     if db.has_foreign_link_to(ctx.tp_id) { return Err(AlterTableWithForeignLink(u.table)); }
+    let mut re_cache = HashMap::new();
     for (col, e) in &u.sets {
       ctx.tp.get_ci(col)?;
-      check(e, ctx.tp, u.table)?;
+      check(e, ctx.tp, &mut re_cache)?;
     }
     let slot_size = ctx.tp.size as usize;
     let buf = Align4U8::new(slot_size); // update to buf, then copy to db
-    let mut update_num = 0;
+    let mut update_num = 0u32;
     filter(db.pr(), &u.where_, ctx.tp_id, ctx.tp.pr(), pred, |data, rid| {
       update_num += 1;
       buf.ptr.copy_from_nonoverlapping(data, slot_size);
       for (col, e) in &u.sets {
         let ci = ctx.tp.get_ci(col).unchecked_unwrap();
         let ci_id = ci.idx(&ctx.tp.cols);
-        let val = CLit::new(eval(e, ctx.tp, data));
+        let val = CLit::new(eval(e, ctx.tp, data, &re_cache));
         if val.is_null() {
           if ci.flags.contains(ColFlags::NOTNULL) { return Err(PutNullOnNotNull); }
           bsset(buf.ptr as *mut u32, ci_id as usize);

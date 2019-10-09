@@ -10,6 +10,13 @@ syntax = { path = "../syntax" }
 db = { path = "../db" }
 index = { path = "../index" }
 query = { path = "../query" }
+rustyline = "5"
+colored = "1.8"
 
-[lib]
-path = "src/lib.rs"
+[[bin]]
+name = 'db'
+path = 'src/cli.rs'
+
+[[bin]]
+name = 'test'
+path = 'src/main.rs'

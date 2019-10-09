@@ -1,6 +1,5 @@
-use parser_macros::lalr1;
-use common::{BareTy::{*, self}, ParserError as PE, ParserErrorKind::*, Lit, CLit, ColTy, AggOp::*, BinOp::*};
-use crate::ast::{*, CmpOp::*};
+use common::{BareTy::{*, self}, ParserError as PE, ParserErrorKind::*, Lit, CLit, ColTy, AggOp::*, BinOp::*, CmpOp::*};
+use crate::ast::*;
 
 #[derive(Default)]
 pub struct Parser<'a>(pub Vec<PE<'a>>);
@@ -10,11 +9,16 @@ impl<'p> Token<'p> {
   fn str(&self) -> &'p str { std::str::from_utf8(self.piece).unwrap() }
 }
 
-#[lalr1(Program)]
+#[parser_macros::lalr1(Program)]
 #[lex(r##"
 priority = [
+  { assoc = 'left', terms = ['Or'] },
+  { assoc = 'left', terms = ['And'] },
+  { assoc = 'no_assoc', terms = ['Eq', 'Ne'] },
+  { assoc = 'no_assoc', terms = ['Le', 'Ge', 'Lt', 'Gt'] },
   { assoc = 'left', terms = ['Add', 'Sub'] },
   { assoc = 'left', terms = ['Mul', 'Div', 'Mod'] },
+  { assoc = 'no_assoc', terms = ['Is', 'Like'] },
   { assoc = 'no_assoc', terms = ['UMinus'] },
   { assoc = 'no_assoc', terms = ['RPar'] },
 ]
@@ -44,9 +48,10 @@ priority = [
 '(m|M)(i|I)(n|N)' = 'Min'
 '(m|M)(a|A)(x|X)' = 'Max'
 '(c|C)(o|O)(u|U)(n|N)(t|T)' = 'Count'
-'(n|N)(o|O)(t|T)' = 'Not'
+'(n|N)(o|O)(t|T)\s+(n|N)(u|U)(l|L)(l|L)' = 'NotNull'
 '(p|P)(r|R)(i|I)(m|M)(a|A)(r|R)(y|Y)' = 'Primary'
 '(f|F)(o|O)(r|R)(e|E)(i|I)(g|G)(n|N)' = 'Foreign'
+'(u|U)(n|N)(i|I)(q|Q)(u|U)(e|E)' = 'Unique'
 '(k|K)(e|E)(y|Y)' = 'Key'
 '(l|L)(i|I)(k|K)(e|E)' = 'Like'
 '(i|I)(n|N)(d|D)(e|E)(x|X)' = 'Index'
@@ -59,10 +64,11 @@ priority = [
 '(v|V)(a|A)(r|R)(c|C)(h|H)(a|A)(r|R)' = 'VarChar'
 '(f|F)(l|L)(o|O)(a|A)(t|T)' = 'Float'
 '(d|D)(a|A)(t|T)(e|E)' = 'Date'
+'(a|A)(n|N)(d|D)' = 'And'
+'(o|O)(r|R)' = 'Or'
 '(n|N)(u|U)(l|L)(l|L)' = 'Null'
 '(t|T)(r|R)(u|U)(e|E)' = 'True'
 '(f|F)(a|A)(l|L)(s|S)(e|E)' = 'False'
-'(a|A)(n|N)(d|D)' = 'And'
 '<' = 'Lt'
 '<=' = 'Le'
 '>=' = 'Ge'
@@ -84,7 +90,7 @@ priority = [
 '-?\d+\.\d*' = 'FloatLit'
 '-?\d+' = 'IntLit'
 "'[^'\\\\]*(\\\\.[^'\\\\]*)*'" = 'StrLit'
-'[A-Za-z][_0-9A-Za-z]*' = 'Id'
+'[A-Za-z]\w*' = 'Id'
 '.' = '_Err'
 "##)]
 impl<'p> Parser<'p> {
@@ -138,8 +144,8 @@ impl<'p> Parser<'p> {
 
   #[rule(NotNullM ->)]
   fn not_null_m0() -> bool { false }
-  #[rule(NotNullM -> Not Null)]
-  fn not_null_m1(_: Token, _: Token) -> bool { true }
+  #[rule(NotNullM -> NotNull)]
+  fn not_null_m1(_: Token) -> bool { true }
 
   #[rule(IdList -> Id)]
   fn id_list0(t: Token) -> Vec<&'p str> { vec![t.str()] }
@@ -167,17 +173,39 @@ impl<'p> Parser<'p> {
   #[prec(UMinus)]
   fn expr_neg(_: Token, e: Expr<'p>) -> Expr<'p> { Expr::Neg(Box::new(e)) }
   #[rule(Expr -> Expr Add Expr)]
-  fn expr_add(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Add, Box::new(l), Box::new(r)) }
+  fn expr_add(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Add, Box::new((l, r))) }
   #[rule(Expr -> Expr Sub Expr)]
-  fn expr_sub(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Sub, Box::new(l), Box::new(r)) }
+  fn expr_sub(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Sub, Box::new((l, r))) }
   #[rule(Expr -> Expr Mul Expr)]
-  fn expr_mul(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Mul, Box::new(l), Box::new(r)) }
+  fn expr_mul(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Mul, Box::new((l, r))) }
   #[rule(Expr -> Expr Div Expr)]
-  fn expr_div(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Div, Box::new(l), Box::new(r)) }
+  fn expr_div(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Div, Box::new((l, r))) }
   #[rule(Expr -> Expr Mod Expr)]
-  fn expr_mod(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Mod, Box::new(l), Box::new(r)) }
+  fn expr_mod(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Mod, Box::new((l, r))) }
   #[rule(Expr -> LPar Expr RPar)]
   fn expr_par(_: Token, e: Expr<'p>, _: Token) -> Expr<'p> { e }
+  #[rule(Expr -> Expr Lt Expr)]
+  fn expr_lt(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Cmp(Lt, Box::new((l, r))) }
+  #[rule(Expr -> Expr Le Expr)]
+  fn expr_le(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Cmp(Le, Box::new((l, r))) }
+  #[rule(Expr -> Expr Ge Expr)]
+  fn expr_ge(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Cmp(Ge, Box::new((l, r))) }
+  #[rule(Expr -> Expr Gt Expr)]
+  fn expr_gt(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Cmp(Gt, Box::new((l, r))) }
+  #[rule(Expr -> Expr Eq Expr)]
+  fn expr_eq(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Cmp(Eq, Box::new((l, r))) }
+  #[rule(Expr -> Expr Ne Expr)]
+  fn expr_ne(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Cmp(Ne, Box::new((l, r))) }
+  #[rule(Expr -> Expr And Expr)]
+  fn expr_and(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::And(Box::new((l, r))) }
+  #[rule(Expr -> Expr Or Expr)]
+  fn expr_or(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Or(Box::new((l, r))) }
+  #[rule(Expr -> Expr Is Null)]
+  fn expr_is_null(e: Expr<'p>, _: Token, _: Token) -> Expr<'p> { Expr::Null(Box::new(e), true) }
+  #[rule(Expr -> Expr Is NotNull)]
+  fn expr_is_not_null(e: Expr<'p>, _: Token, _: Token) -> Expr<'p> { Expr::Null(Box::new(e), false) }
+  #[rule(Expr -> Expr Like StrLit)]
+  fn expr_like(e: Expr<'p>, _: Token, s: Token) -> Expr<'p> { Expr::Like(Box::new(e), s.str_trim()) }
 
   #[rule(SetList -> Id Eq Expr)]
   fn set_list0(t: Token, _: Token, l: Expr<'p>) -> Vec<(&'p str, Expr<'p>)> { vec![(t.str(), l)] }
@@ -198,6 +226,8 @@ impl<'p> Parser<'p> {
   fn cons_foreign(_: Token, _: Token, _: Token, t: Token, _: Token, _: Token, table: Token, _: Token, col: Token, _: Token) -> Vec<TableCons<'p>> { vec![TableCons { name: t.str(), kind: TableConsKind::Foreign { table: table.str(), col: col.str() } }] }
   #[rule(Cons -> Primary Key LPar IdList RPar)]
   fn cons_primary(_: Token, _: Token, _: Token, il: Vec<&'p str>, _: Token) -> Vec<TableCons<'p>> { il.into_iter().map(|name| TableCons { name, kind: TableConsKind::Primary }).collect() }
+  #[rule(Cons -> Unique LPar Id RPar)]
+  fn cons_unique(_: Token, _: Token, t: Token, _: Token) -> Vec<TableCons<'p>> { vec![TableCons { name: t.str(), kind: TableConsKind::Unique }] }
   #[rule(Cons -> Check LPar Id RPar In LPar LitList RPar)]
   fn cons_check(_: Token, _: Token, t: Token, _: Token, _: Token, _: Token, ll: Vec<CLit<'p>>, _: Token) -> Vec<TableCons<'p>> { vec![TableCons { name: t.str(), kind: TableConsKind::Check(ll) }] }
 
@@ -242,8 +272,8 @@ impl<'p> Parser<'p> {
   fn cond_ne(l: ColRef<'p>, _: Token, r: Atom<'p>) -> Cond<'p> { Cond::Cmp(Ne, l, r) }
   #[rule(Cond -> ColRef Is Null)]
   fn cond_is_null(c: ColRef<'p>, _: Token, _: Token) -> Cond<'p> { Cond::Null(c, true) }
-  #[rule(Cond -> ColRef Is Not Null)]
-  fn cond_is_not_null(c: ColRef<'p>, _: Token, _: Token, _: Token) -> Cond<'p> { Cond::Null(c, false) }
+  #[rule(Cond -> ColRef Is NotNull)]
+  fn cond_is_not_null(c: ColRef<'p>, _: Token, _: Token) -> Cond<'p> { Cond::Null(c, false) }
   #[rule(Cond -> ColRef Like StrLit)]
   fn cond_like(c: ColRef<'p>, _: Token, s: Token) -> Cond<'p> { Cond::Like(c, s.str_trim()) }
 
