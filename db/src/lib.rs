@@ -7,6 +7,7 @@ pub mod show;
 pub use crate::{db::*, iter::*, show::*};
 
 use regex::Regex;
+use std::borrow::Cow;
 
 use common::{*, Error::*, BareTy::*};
 use chrono::NaiveDate;
@@ -27,6 +28,7 @@ pub unsafe fn fill_ptr(ptr: *mut u8, col: ColTy, val: CLit) -> Result<()> {
     }
     (Date, Lit::Date(v)) => (ptr as *mut NaiveDate).write(v), // it is not likely to enter this case, because parser cannot produce Date
     (VarChar, Lit::Str(v)) => {
+      let v = escape(v);
       let size = col.size;
       if v.len() > size as usize { return Err(PutStrTooLong { limit: size, actual: v.len() }); }
       ptr.write(v.len() as u8);
@@ -49,8 +51,55 @@ pub unsafe fn ptr2lit(data: *const u8, ci_id: u32, ci: &ColInfo) -> CLit {
   })
 }
 
-pub unsafe fn like2re(like: &str) -> Result<Regex> {
-  // todo: escape
-  let re = regex::escape(like).replace('%', ".*").replace('_', ".");
-  Regex::new(&re).map_err(|reason| InvalidLike { like, reason: Box::new(reason) })
+// it seems that sql doesn't support any escape characters (like \n, \t), in order to represent ', it uses ''
+fn escape(s: &str) -> Cow<str> {
+  if s.contains("''") { Cow::Owned(s.replace("''", "'")) } else { Cow::Borrowed(s) }
+}
+
+fn escape_re(like: &str) -> String {
+  let like = escape(like);
+  let mut re = String::with_capacity(like.len());
+  let mut escape = false;
+  macro_rules! push {
+    ($ch: expr) => {{
+      if regex_syntax::is_meta_character($ch) { re.push('\\'); }
+      re.push($ch);
+    }};
+  }
+  for ch in like.chars() {
+    if escape {
+      match ch {
+        '%' | '_' => re.push(ch), // \% => %, \_ => \_
+        _ => { // \\ => \\, // \other => \\maybe_escape(other)
+          if ch != '\\' { push!('\\'); }
+          push!(ch);
+        }
+      }
+      escape = false;
+    } else {
+      match ch {
+        '\\' => escape = true,
+        '%' => { (re.push('.'), re.push('*')); }
+        '_' => re.push('.'),
+        _ => push!(ch),
+      }
+    }
+  }
+  if escape { push!('\\'); }
+  re
+}
+
+pub fn like2re(like: &str) -> Result<Regex> {
+  Regex::new(&escape_re(like)).map_err(|e| InvalidLike { like, reason: Box::new(e) })
+}
+
+#[test]
+fn test_escape() {
+  assert_eq!(escape(r#"''"#), r#"'"#);
+  assert_eq!(escape(r#"'''"#), r#"''"#);
+  assert_eq!(escape(r#"''''"#), r#"''"#);
+  assert_eq!(escape_re(r#"%_"#), r#".*."#);
+  assert_eq!(escape_re(r#"%_\%\_\\"#), r#".*.%_\\"#);
+  assert_eq!(escape_re(r#"\n\r\t\\\"#), r#"\\n\\r\\t\\\\"#);
+  assert_eq!(escape_re(r#".*."#), r#"\.\*\."#);
 }

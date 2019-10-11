@@ -12,6 +12,6 @@ test:
 	$(BROWSER) cobertura.html
 
 create:
-	 RUSTFLAGS='-C debug-assertions' cargo test -p tests create --release -- --ignored
+	 cargo test -p tests create --release -- --ignored
 	 mv tests/orderDB .
 	 cp orderDB orderDB1

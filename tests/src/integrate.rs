@@ -100,10 +100,20 @@ fn select() {
   ok!(e, "drop index orders (customer_id);");
 
   err!(e, "select website_id, avg(price) from price; -- error, mixed select");
-  ok!(e, "select avg(price) from price where price >= 60;");
-  ok!(e, "select min(price) from price where price >= 60;");
+  ok!(e, "select avg(price), min(price), max(price) from price where price >= 60;");
 
   ok!(e, "select * from orders, customer, website where website.id=orders.website_id and customer.id=orders.customer_id and orders.quantity > 5;");
+
+  ok!(e, "create table test (name varchar(10));");
+  ok!(e, r#"insert into test values ('''\n\r\t\');"#);
+  err!(e, r#"insert into test values ('\n\n\n\n\n\n'); -- error, too long (\n is interpreted literally)"#);
+  ok!(e, r#"select * from test where name like '%\';"#);
+  ok!(e, r#"select * from test where name like '%\\'; -- the same as above"#);
+  ok!(e, r#"insert into test values ('%%__\\''');"#);
+  ok!(e, r#"select * from test where name like '\%\%\_\_\\\\''';"#);
+  ok!(e, "insert into test values (null);");
+  ok!(e, "select count(name) from test; -- 2");
+  ok!(e, r#"drop table test;"#);
 }
 
 fn insert() {

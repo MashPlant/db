@@ -57,19 +57,17 @@ fn main() {
           let cmd = words.next().unwrap();
           const OUTPUT: &str = ".output";
           const READ: &str = ".read";
+          const COLOR: &str = ".color";
           match cmd {
             OUTPUT => output = words.next().map(|x| x.to_owned()),
-            READ => {
-              let file = if let Some(file) = words.next() { file } else {
-                eprintln!("Usage: {} <file>", READ);
-                continue;
-              };
-              let input = if let Ok(input) = fs::read_to_string(file) { input } else {
-                eprintln!("Error: fails to read from {}", file);
-                continue;
-              };
-              if let Err(e) = e.exec_all(&input, |_| {}, |_| {}) { eprintln!("Error: {:?}", e); }
-            }
+            READ => if let Some(file) = words.next() {
+              if let Ok(input) = fs::read_to_string(file) {
+                if let Err(e) = e.exec_all(&input, |_| {}, |_| {}) { eprintln!("Error: {:?}", e); }
+              } else { eprintln!("Error: fails to read from {}", file); }
+            } else { eprintln!("Usage: {} <file>", READ); }
+            COLOR => if let Some(color) = words.next().and_then(|x| x.parse().ok()) {
+              rl.set_helper(if color { Some(SqlHelper) } else { None });
+            } else { eprintln!("Usage: {} [true|false]", COLOR); }
             _ => eprintln!("Unknown command: {}", cmd),
           }
         } else {

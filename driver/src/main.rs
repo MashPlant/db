@@ -12,5 +12,5 @@ fn exec_repl(e: &mut Eval, code: &str) {
 
 fn main() {
   let mut e = Eval::default();
-  exec_repl(&mut e, include_str!("../../tests/sql/test_update.sql"));
+  exec_repl(&mut e, include_str!("../../tests/sql/test_select.sql"));
 }

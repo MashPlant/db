@@ -12,8 +12,16 @@ members = [
   "tests",
 ]
 
-[profile.dev.overrides."parser-macros"]
+[profile.dev.overrides."*"]
 opt-level = 3
 
 [profile.release]
+lto = true
 panic = "abort"
+
+# this controls cargo test --release
+[profile.bench]
+opt-level = 3
+debug = true
+debug-assertions = true
+overflow-checks = true
