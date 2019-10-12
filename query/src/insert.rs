@@ -54,7 +54,7 @@ impl InsertCtx<'_> {
         debug_assert_ne!(ci.index, !0); // all unique keys have index, `create_table` guarantee this
         macro_rules! handle {
           ($ty: ident) => {{
-            let mut index = Index::<{ $ty }>::new(self.db, Rid::new(self.tp_id, ci_id));
+            let mut index = Index::<{ $ty }>::new(self.db, self.tp_id, ci_id);
             let (mut it, end) = (index.lower_bound(ptr), index.upper_bound(ptr));
             while it != end {
               let rid1 = it.next().unchecked_unwrap();
@@ -70,7 +70,7 @@ impl InsertCtx<'_> {
         debug_assert!(f_tp.cols.get_unchecked(ci.foreign_col as usize).index != !0);
         macro_rules! handle {
           ($ty: ident) => {{
-            let index = Index::<{ $ty }>::new(self.db, Rid::new(ci.foreign_table, ci.foreign_col as u32));
+            let index = Index::<{ $ty }>::new(self.db, ci.foreign_table, ci.foreign_col as u32);
             if !index.contains(ptr) {
               return Err(PutNonexistentForeignKey { col: ci.name(), val });
             }
@@ -146,7 +146,7 @@ pub fn insert<'a>(i: &Insert<'a>, db: &mut Db) -> Result<'a, ()> {
           let ptr = buf.ptr.add(ci.off as usize);
           macro_rules! handle {
             ($ty: ident) => {{
-              let mut index = Index::<{ $ty }>::new(db, Rid::new(ctx.tp_id, i as u32));
+              let mut index = Index::<{ $ty }>::new(db, ctx.tp_id, i as u32);
               index.insert(ptr, rid);
             }};
           }

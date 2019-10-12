@@ -16,7 +16,7 @@ fn index() {
   for &max in &[N / 100, N / 10, N, N * 10, N * 100] {
     let mut e = Eval::default();
     let mut map = BTreeSet::new();
-    let rid; // init later
+    let (table, col); // init later
     macro_rules! ins {
       () => {
         e.exec(&Stmt::Insert(Insert { table: "test", vals: ins.iter().map(|x| vec![lit(*x)]).collect() })).unwrap();
@@ -36,7 +36,7 @@ fn index() {
     }
     macro_rules! test {
       () => {
-        unsafe { Index::<{Int}>::new(e.db.as_mut().unwrap(), rid).debug_check_all(); }
+        unsafe { Index::<{Int}>::new(e.db.as_mut().unwrap(), table, col).debug_check_all(); }
         for &t in &test {
           let index_count = e.select(&Select {
             ops: None,
@@ -59,7 +59,8 @@ fn index() {
       let db = e.db.as_mut().unwrap();
       let (tp_id, tp) = db.get_tp("test").unwrap();
       let ci = tp.get_ci("id").unwrap();
-      rid = Rid::new(tp_id, ci.idx(&tp.cols));
+      table = tp_id;
+      col = ci.idx(&tp.cols);
       db.get_page::<IndexPage>(ci.index).cap = 8;
     }
     ins!();

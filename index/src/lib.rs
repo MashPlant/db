@@ -20,18 +20,18 @@ pub use create::create;
 pub struct Index<const T: BareTy> {
   db: NonNull<Db>,
   root: u32,
-  // col points to (table_page in db, col_slot in table) in TablePage
-  col: Rid,
+  table: u32,
+  col: u32,
   rid_off: u16,
   _p: PhantomData<Cmp<{ T }>>,
 }
 
 impl<const T: BareTy> Index<{ T }> {
-  pub unsafe fn new(db: &mut Db, col: Rid) -> Index<{ T }> {
-    let tp = db.get_page::<TablePage>(col.page());
-    let root = tp.cols.get_unchecked_mut(col.slot() as usize).index;
+  pub unsafe fn new(db: &mut Db, table: u32, col: u32) -> Index<{ T }> {
+    let tp = db.get_page::<TablePage>(table);
+    let root = tp.cols.get_unchecked_mut(col as usize).index;
     let rid_off = db.get_page::<IndexPage>(root).rid_off;
-    Index { db: NonNull::new_unchecked(db), root, col, rid_off, _p: PhantomData }
+    Index { db: NonNull::new_unchecked(db), root, table, col, rid_off, _p: PhantomData }
   }
 
   unsafe fn db<'a>(&mut self) -> &'a mut Db { self.db.as_ptr().r() }
@@ -161,8 +161,8 @@ impl<const T: BareTy> Index<{ T }> {
 
   unsafe fn make_root(&mut self, new_id: u32) {
     self.root = new_id;
-    let tp = self.db().get_page::<TablePage>(self.col.page());
-    tp.cols.get_unchecked_mut(self.col.slot() as usize).index = new_id;
+    let tp = self.db().get_page::<TablePage>(self.table);
+    tp.cols.get_unchecked_mut(self.col as usize).index = new_id;
   }
 
   unsafe fn make_data_rid(&self, data: *const u8, rid: Rid) -> Align4U8 {
@@ -191,8 +191,8 @@ impl<const T: BareTy> Index<{ T }> {
 
   pub unsafe fn debug_check_all(&self) {
     if cfg!(debug_assertions) {
-      let tp = self.pr().db().get_page::<TablePage>(self.col.page());
-      assert_eq!(tp.cols[self.col.slot() as usize].index, self.root);
+      let tp = self.pr().db().get_page::<TablePage>(self.table);
+      assert_eq!(tp.cols[self.col as usize].index, self.root);
       self.dfs(self.root, ptr::null(), ptr::null());
     }
   }

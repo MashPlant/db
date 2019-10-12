@@ -1,5 +1,4 @@
 use std::{fmt, cmp::Ordering, mem, marker::PhantomData};
-use unchecked_unwrap::UncheckedUnwrap;
 use chrono::NaiveDate;
 use crate::debug_unreachable;
 
@@ -54,13 +53,18 @@ impl Lit<'_> {
     match (self, other) {
       (Lit::Null, Lit::Null) => Ordering::Equal,
       (Lit::Bool(l), Lit::Bool(r)) => l.cmp(r),
-      // it is okay to unwrap, because we never get NaN in Lit
-      (Lit::Number(l), Lit::Number(r)) => l.partial_cmp(r).unchecked_unwrap(),
+      (&Lit::Number(l), &Lit::Number(r)) => fcmp(l, r),
       (Lit::Date(l), Lit::Date(r)) => l.cmp(r),
       (Lit::Str(l), Lit::Str(r)) => l.cmp(r),
       _ => debug_unreachable!(),
     }
   }
+}
+
+// this can be used for the comparison between non-nan float (in the database we always guarantee float is not-nan)
+// why not using partial_cmp + unchecked_unwrap? I've check the output asm, this way is more efficient
+pub fn fcmp<T: PartialOrd>(l: T, r: T) -> Ordering {
+  if l < r { Ordering::Less } else if l > r { Ordering::Greater } else { Ordering::Equal }
 }
 
 impl fmt::Debug for ColTy {
@@ -130,7 +134,8 @@ pub enum AggOp { Avg, Sum, Min, Max, Count, CountAll }
 
 impl AggOp {
   pub fn name(self) -> &'static str {
-    match self { AggOp::Avg => "avg", AggOp::Sum => "sum", AggOp::Min => "min", AggOp::Max => "max", AggOp::Count | AggOp::CountAll => "count" }
+    use AggOp::*;
+    match self { Avg => "avg", Sum => "sum", Min => "min", Max => "max", Count | CountAll => "count" }
   }
 }
 
@@ -139,7 +144,8 @@ pub enum BinOp { Add, Sub, Mul, Div, Mod }
 
 impl BinOp {
   pub fn name(self) -> char {
-    match self { BinOp::Add => '+', BinOp::Sub => '-', BinOp::Mul => '*', BinOp::Div => '/', BinOp::Mod => '%' }
+    use BinOp::*;
+    match self { Add => '+', Sub => '-', Mul => '*', Div => '/', Mod => '%' }
   }
 }
 
@@ -148,6 +154,13 @@ pub enum CmpOp { Lt, Le, Ge, Gt, Eq, Ne }
 
 impl CmpOp {
   pub fn name(self) -> &'static str {
-    match self { CmpOp::Lt => "<", CmpOp::Le => "<=", CmpOp::Ge => ">=", CmpOp::Gt => ">", CmpOp::Eq => "==", CmpOp::Ne => "!=" }
+    use CmpOp::*;
+    match self { Lt => "<", Le => "<=", Ge => ">=", Gt => ">", Eq => "==", Ne => "!=" }
+  }
+
+  // (x <op> y) == (y <op.rev()> x)
+  pub fn rev(self) -> CmpOp {
+    use CmpOp::*;
+    match self { Lt => Gt, Le => Ge, Ge => Le, Gt => Lt, Eq => Eq, Ne => Ne }
   }
 }

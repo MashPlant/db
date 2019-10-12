@@ -113,8 +113,8 @@ impl<'a> Cond<'a> {
     match self { Cond::Cmp(_, l, _) | Cond::Null(l, _) | Cond::Like(l, _) => l }
   }
 
-  pub fn rhs_col(&self) -> Option<&ColRef<'a>> {
-    match self { Cond::Cmp(_, _, Atom::ColRef(r)) => Some(r), _ => None }
+  pub fn rhs_col_op(&self) -> Option<(&ColRef<'a>, CmpOp)> {
+    match self { Cond::Cmp(op, _, Atom::ColRef(r)) => Some((r, *op)), _ => None }
   }
 }
 

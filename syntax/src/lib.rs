@@ -1,23 +1,26 @@
 #![feature(proc_macro_hygiene)]
 #![feature(box_patterns)]
+
 pub mod ast;
 pub mod parser;
 
 pub use crate::{ast::*, parser::*};
 
+use typed_arena::Arena;
+
 use common::{ParserError as PE, ParserErrorKind::*, Error};
 
-pub fn work(code: &str) -> std::result::Result<Vec<Stmt>, Error> {
-  let mut p = Parser(vec![]);
+pub fn work<'a>(code: &'a str, alloc: &'a Arena<u8>) -> Result<Vec<Stmt<'a>>, Error<'a>> {
+  let mut p = Parser { pe: vec![], alloc };
   match p.parse(&mut Lexer::new(code.as_bytes())) {
-    Ok(ss) if p.0.is_empty() => Ok(ss),
+    Ok(ss) if p.pe.is_empty() => Ok(ss),
     Err(t) => {
       match t.ty {
-        TokenKind::_Err => p.0.push(PE { line: t.line, col: t.col, kind: UnrecognizedChar(t.piece[0] as char) }),
-        _ => p.0.push(PE { line: t.line, col: t.col, kind: SyntaxError }),
+        TokenKind::_Err => p.pe.push(PE { line: t.line, col: t.col, kind: UnrecognizedChar(t.piece[0] as char) }),
+        _ => p.pe.push(PE { line: t.line, col: t.col, kind: SyntaxError }),
       }
-      Err(Error::ParserErrors(p.0.into()))
+      Err(Error::ParserErrors(p.pe.into()))
     }
-    _ => Err(Error::ParserErrors(p.0.into())),
+    _ => Err(Error::ParserErrors(p.pe.into())),
   }
 }

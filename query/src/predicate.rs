@@ -96,7 +96,7 @@ pub unsafe fn cross_predicate<'a>(op: CmpOp, col: (&ColInfo, &ColInfo), tp: (&Ta
 pub unsafe fn one_where<'a>(where_: &[Cond<'a>], tp: &TablePage) -> Result<'a, impl Fn(*const u8) -> bool> {
   let mut preds = Vec::with_capacity(where_.len());
   for cond in where_ {
-    let (l, r) = (cond.lhs_col(), cond.rhs_col());
+    let (l, r) = (cond.lhs_col(), cond.rhs_col_op().map(|x| x.0));
     if let Some(t) = l.table { if t != tp.name() { return Err(NoSuchTable(t)); } }
     if let Some(&ColRef { table: Some(t), .. }) = r { if t != tp.name() { return Err(NoSuchTable(t)); } }
     // table name is checked before, col name & type & value format/size all checked in one_predicate

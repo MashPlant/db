@@ -1,15 +1,37 @@
+use std::str::{self, FromStr};
+use typed_arena::Arena;
+
 use common::{BareTy::{*, self}, ParserError as PE, ParserErrorKind::*, Lit, CLit, ColTy, AggOp::*, BinOp::*, CmpOp::*};
 use crate::ast::*;
 
-#[derive(Default)]
-pub struct Parser<'a>(pub Vec<PE<'a>>);
+pub struct Parser<'a> {
+  pub pe: Vec<PE<'a>>,
+  // allocator for string
+  pub alloc: &'a Arena<u8>,
+}
+
+impl<'p> Parser<'p> {
+  // it seems that sql doesn't support any escape characters (like \n, \t), in order to represent ', it uses ''
+  fn escape(&self, s: &'p str) -> &'p str {
+    if s.contains("''") {
+      let s = s.replace("''", "'");
+      let s = self.alloc.alloc_extend(s.bytes());
+      unsafe { str::from_utf8_unchecked(s) }
+    } else { s }
+  }
+}
 
 impl<'p> Token<'p> {
-  fn str_trim(&self) -> &'p str { std::str::from_utf8(&self.piece[1..self.piece.len() - 1]).unwrap() }
-  fn str(&self) -> &'p str { std::str::from_utf8(self.piece).unwrap() }
+  fn str_trim(&self) -> &'p str { unsafe { str::from_utf8_unchecked(self.piece.get_unchecked(1..self.piece.len() - 1)) } }
+  fn str(&self) -> &'p str { unsafe { str::from_utf8_unchecked(self.piece) } }
+  fn parse<T: FromStr + Default, U>(&self, ok: impl Fn(T) -> U, mut err: impl FnMut(u32, u32, &'p str)) -> U {
+    let s = self.str();
+    ok(s.parse().unwrap_or_else(|_| (err(self.line, self.col, s), T::default()).1))
+  }
 }
 
 #[parser_macros::lalr1(Program)]
+#[use_unsafe]
 #[lex(r##"
 priority = [
   { assoc = 'left', terms = ['Or'] },
@@ -205,7 +227,7 @@ impl<'p> Parser<'p> {
   #[rule(Expr -> Expr Is NotNull)]
   fn expr_is_not_null(e: Expr<'p>, _: Token, _: Token) -> Expr<'p> { Expr::Null(Box::new(e), false) }
   #[rule(Expr -> Expr Like StrLit)]
-  fn expr_like(e: Expr<'p>, _: Token, s: Token) -> Expr<'p> { Expr::Like(Box::new(e), s.str_trim()) }
+  fn expr_like(&self, e: Expr<'p>, _: Token, s: Token) -> Expr<'p> { Expr::Like(Box::new(e), self.escape(s.str_trim())) }
 
   #[rule(SetList -> Id Eq Expr)]
   fn set_list0(t: Token, _: Token, l: Expr<'p>) -> Vec<(&'p str, Expr<'p>)> { vec![(t.str(), l)] }
@@ -228,8 +250,8 @@ impl<'p> Parser<'p> {
   fn cons_primary(_: Token, _: Token, _: Token, il: Vec<&'p str>, _: Token) -> Vec<TableCons<'p>> { il.into_iter().map(|name| TableCons { name, kind: TableConsKind::Primary }).collect() }
   #[rule(Cons -> Unique LPar Id RPar)]
   fn cons_unique(_: Token, _: Token, t: Token, _: Token) -> Vec<TableCons<'p>> { vec![TableCons { name: t.str(), kind: TableConsKind::Unique }] }
-  #[rule(Cons -> Check LPar Id RPar In LPar LitList RPar)]
-  fn cons_check(_: Token, _: Token, t: Token, _: Token, _: Token, _: Token, ll: Vec<CLit<'p>>, _: Token) -> Vec<TableCons<'p>> { vec![TableCons { name: t.str(), kind: TableConsKind::Check(ll) }] }
+  #[rule(Cons -> Check LPar Id In LPar LitList RPar RPar)]
+  fn cons_check(_: Token, _: Token, t: Token, _: Token, _: Token, ll: Vec<CLit<'p>>, _: Token, _: Token) -> Vec<TableCons<'p>> { vec![TableCons { name: t.str(), kind: TableConsKind::Check(ll) }] }
 
   #[rule(Agg -> ColRef)]
   fn agg0(col: ColRef<'p>) -> Agg<'p> { Agg { col, op: None } }
@@ -289,15 +311,9 @@ impl<'p> Parser<'p> {
   #[rule(Lit -> False)]
   fn lit_false(_: Token) -> CLit<'p> { CLit::new(Lit::Bool(false)) }
   #[rule(Lit -> IntLit)]
-  fn lit_int(&mut self, t: Token) -> CLit<'p> {
-    let (s, line, col) = (t.str(), t.line, t.col);
-    CLit::new(Lit::Number(s.parse::<i32>().unwrap_or_else(|_| (self.0.push(PE { line, col, kind: InvalidInt(s) }), 0).1) as f64))
-  }
+  fn lit_int(&mut self, t: Token) -> CLit<'p> { t.parse(|x: i32| CLit::new(Lit::Number(x as f64)), |line, col, s| self.pe.push(PE { line, col, kind: InvalidInt(s) })) }
   #[rule(Lit -> FloatLit)]
-  fn lit_float(&mut self, t: Token) -> CLit<'p> {
-    let (s, line, col) = (t.str(), t.line, t.col);
-    CLit::new(Lit::Number(s.parse::<f32>().unwrap_or_else(|_| (self.0.push(PE { line, col, kind: InvalidFloat(s) }), 0.0).1) as f64))
-  }
+  fn lit_float(&mut self, t: Token) -> CLit<'p> { t.parse(|x: f32| CLit::new(Lit::Number(x as f64)), |line, col, s| self.pe.push(PE { line, col, kind: InvalidFloat(s) })) }
   #[rule(Lit -> StrLit)]
   fn lit_str(t: Token) -> CLit<'p> { CLit::new(Lit::Str(t.str_trim())) }
 
@@ -313,10 +329,7 @@ impl<'p> Parser<'p> {
   fn bare_ty_var_char(_: Token) -> BareTy { VarChar }
 
   #[rule(ColTy -> BareTy LPar IntLit RPar)]
-  fn col_ty(&mut self, ty: BareTy, _: Token, t: Token, _: Token) -> ColTy {
-    let (s, line, col) = (t.str(), t.line, t.col);
-    ColTy { size: s.parse().unwrap_or_else(|_| (self.0.push(PE { line, col, kind: TypeSizeTooLarge(s) }), 0).1), ty }
-  }
+  fn col_ty(&mut self, ty: BareTy, _: Token, t: Token, _: Token) -> ColTy { t.parse(|size| ColTy { size, ty }, |line, col, s| self.pe.push(PE { line, col, kind: TypeSizeTooLarge(s) })) }
   #[rule(ColTy -> Bool)]
   fn col_ty_bool(_: Token) -> ColTy { ColTy { size: 0, ty: Bool } }
   #[rule(ColTy -> Int)]

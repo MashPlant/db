@@ -1,4 +1,5 @@
 use std::{borrow::Cow, fs};
+use typed_arena::Arena;
 
 use common::{*, Error::*};
 use syntax::ast::*;
@@ -11,8 +12,8 @@ pub struct Eval {
 }
 
 impl Eval {
-  pub fn exec_all<'a>(&mut self, code: &'a str, input_handler: impl Fn(&Stmt), result_handler: impl Fn(&str)) -> Result<'a, ()> {
-    for s in &syntax::work(code)? {
+  pub fn exec_all<'a>(&mut self, code: &'a str, alloc: &'a Arena<u8>, input_handler: impl Fn(&Stmt), result_handler: impl Fn(&str)) -> Result<'a, ()> {
+    for s in &syntax::work(code, alloc)? {
       input_handler(s);
       result_handler(&self.exec(s)?);
     }

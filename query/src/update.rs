@@ -51,7 +51,7 @@ unsafe fn check<'a>(e: &Expr<'a>, tp: &mut TablePage, re_cache: &mut HashMap<&'a
 
 // if one of the operand is null, the result is null (including comparison, e.g., (null = null) evaluates to null, instead of false in select)
 // the only exception is "is (not) null" check, it always return bool
-// if div0 or mod0 occurs, the result is null (that is how sqlite behaves)
+// if arithmetic result is NaN, the result is null
 unsafe fn eval<'a>(e: &Expr<'a>, tp: &mut TablePage, data: *const u8, re_cache: &HashMap<&'a str, Regex>) -> Lit<'a> {
   match e {
     Expr::Atom(x) => match x {
@@ -94,10 +94,8 @@ unsafe fn eval<'a>(e: &Expr<'a>, tp: &mut TablePage, data: *const u8, re_cache: 
     Expr::Bin(op, box (l, r)) => {
       let l = match eval(l, tp, data, re_cache) { Lit::Number(x) => x, _ => return Lit::Null };
       let r = match eval(r, tp, data, re_cache) { Lit::Number(x) => x, _ => return Lit::Null };
-      Lit::Number(match op {
-        Add => l + r, Sub => l - r, Mul => l * r,
-        Div => if r == 0.0 { return Lit::Null; } else { l / r }, Mod => if r == 0.0 { return Lit::Null; } else { l % r },
-      })
+      let res = match op { Add => l + r, Sub => l - r, Mul => l * r, Div => l / r, Mod => l % r, };
+      if res.is_nan() { Lit::Null } else { Lit::Number(res) }
     }
   }
 }
@@ -145,7 +143,7 @@ pub fn update<'a>(u: &Update<'a>, db: &mut Db) -> Result<'a, String> {
           let new = buf.ptr.add(ci.off as usize);
           macro_rules! handle {
             ($ty: ident) => {{
-              let mut index = Index::<{ $ty }>::new(db, Rid::new(ctx.tp_id, ci_id));
+              let mut index = Index::<{ $ty }>::new(db, ctx.tp_id, ci_id);
               index.delete(old, rid);
               index.insert(new, rid);
             }};

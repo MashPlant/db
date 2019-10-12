@@ -20,11 +20,12 @@ unsafe fn try_filter_with_index<'a>(db: &mut Db, where_: &[impl Borrow<Cond<'a>>
           let ci_id = ci.idx(&tp.cols);
           if ci.index != !0 {
             let buf = Align4U8::new(ci.ty.size() as usize);
+            let is_only_pred = where_.len() == 1;
             // safe because `one_predicate` have verified the type & value format/size
             fill_ptr(buf.ptr, ci.ty, r).unchecked_unwrap();
             macro_rules! handle {
               ($ty: ident) => {{
-                let mut index = Index::<{ $ty }>::new(db, Rid::new(tp_id, ci_id));
+                let mut index = Index::<{ $ty }>::new(db, tp_id, ci_id);
                 match op {
                   Lt | Le | Eq => {
                     let (mut it, end) = match op {
@@ -36,14 +37,14 @@ unsafe fn try_filter_with_index<'a>(db: &mut Db, where_: &[impl Borrow<Cond<'a>>
                     while it != end {
                       let rid = it.next().unchecked_unwrap();
                       let ptr = db.get_data_slot(tp, rid);
-                      if pred(ptr) { f(ptr, rid)?; }
+                      if is_only_pred || pred(ptr) { f(ptr, rid)?; }
                     }
                   },
                   Ge | Gt => {
                     let mut it = if op == Ge { index.lower_bound(buf.ptr) } else { index.upper_bound(buf.ptr) };
                     while let Some(rid) = it.next() {
                       let ptr = db.get_data_slot(tp, rid);
-                      if pred(ptr) { f(ptr, rid)?; }
+                      if is_only_pred || pred(ptr) { f(ptr, rid)?; }
                     }
                   },
                   Ne => continue, // can't optimize with index

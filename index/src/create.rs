@@ -1,6 +1,5 @@
 use common::{*, Error::*, BareTy::*};
 use db::Db;
-use physics::*;
 use crate::{Index, handle_all};
 
 // place it here instead of in Db because need to insert all existing keys
@@ -13,7 +12,7 @@ pub fn create<'a>(db: &mut Db, table: &'a str, col: &'a str) -> Result<'a, ()> {
     db.alloc_index(ci);
     macro_rules! handle {
       ($ty: ident) => {{
-        let mut index = Index::<{ $ty }>::new(db, Rid::new(tp_id, ci_id));
+        let mut index = Index::<{ $ty }>::new(db, tp_id, ci_id);
         for (data, rid) in db.record_iter(tp_id, tp) {
           let data = data.as_ptr();
           let ptr = data.add(ci.off as usize);

@@ -7,7 +7,6 @@ pub mod show;
 pub use crate::{db::*, iter::*, show::*};
 
 use regex::Regex;
-use std::borrow::Cow;
 
 use common::{*, Error::*, BareTy::*};
 use chrono::NaiveDate;
@@ -28,7 +27,6 @@ pub unsafe fn fill_ptr(ptr: *mut u8, col: ColTy, val: CLit) -> Result<()> {
     }
     (Date, Lit::Date(v)) => (ptr as *mut NaiveDate).write(v), // it is not likely to enter this case, because parser cannot produce Date
     (VarChar, Lit::Str(v)) => {
-      let v = escape(v);
       let size = col.size;
       if v.len() > size as usize { return Err(PutStrTooLong { limit: size, actual: v.len() }); }
       ptr.write(v.len() as u8);
@@ -51,13 +49,7 @@ pub unsafe fn ptr2lit(data: *const u8, ci_id: u32, ci: &ColInfo) -> CLit {
   })
 }
 
-// it seems that sql doesn't support any escape characters (like \n, \t), in order to represent ', it uses ''
-fn escape(s: &str) -> Cow<str> {
-  if s.contains("''") { Cow::Owned(s.replace("''", "'")) } else { Cow::Borrowed(s) }
-}
-
 fn escape_re(like: &str) -> String {
-  let like = escape(like);
   let mut re = String::with_capacity(like.len());
   let mut escape = false;
   macro_rules! push {

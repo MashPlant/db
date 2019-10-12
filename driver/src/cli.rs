@@ -8,6 +8,7 @@ use syntax::{Lexer, TokenKind};
 struct SqlHelper;
 
 impl Highlighter for SqlHelper {
+  #[cfg_attr(tarpaulin, skip)]
   fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
     use TokenKind::*;
     let mut lexer = Lexer::new(line.as_bytes());

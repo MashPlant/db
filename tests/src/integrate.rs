@@ -1,3 +1,5 @@
+use typed_arena::Arena;
+
 use driver::Eval;
 use physics::*;
 use common::{*, BareTy::*};
@@ -11,8 +13,8 @@ const PRICE: &str = include_str!("../sql/price.sql");
 const ORDERS: &str = include_str!("../sql/orders.sql");
 
 // format! input stmts to cover related code
-macro_rules! ok { ($e: expr, $sql: expr) => { $e.exec_all($sql, |x| { let _ = format!("{:?}", x); }, |_| {}).unwrap(); }; }
-macro_rules! err { ($e: expr, $sql: expr) => { $e.exec_all($sql, |x| { let _ = format!("{:?}", x); }, |_| {}).unwrap_err(); }; }
+macro_rules! ok { ($e: expr, $sql: expr) => { $e.exec_all($sql, &Arena::default(), |x| { let _ = format!("{:?}", x); }, |_| {}).unwrap(); }; }
+macro_rules! err { ($e: expr, $sql: expr) => { $e.exec_all($sql, &Arena::default(), |x| { let _ = format!("{:?}", x); }, |_| {}).unwrap_err(); }; }
 
 #[test]
 #[ignore]
@@ -102,7 +104,7 @@ fn select() {
   err!(e, "select website_id, avg(price) from price; -- error, mixed select");
   ok!(e, "select avg(price), min(price), max(price) from price where price >= 60;");
 
-  ok!(e, "select * from orders, customer, website where website.id=orders.website_id and customer.id=orders.customer_id and orders.quantity > 5;");
+  ok!(e, "select * from orders, customer, website where website.id = orders.website_id and customer.id = orders.customer_id and orders.quantity > 5;");
 
   ok!(e, "create table test (name varchar(10));");
   ok!(e, r#"insert into test values ('''\n\r\t\');"#);
@@ -113,7 +115,13 @@ fn select() {
   ok!(e, r#"select * from test where name like '\%\%\_\_\\\\''';"#);
   ok!(e, "insert into test values (null);");
   ok!(e, "select count(name) from test; -- 2");
-  ok!(e, r#"drop table test;"#);
+  ok!(e, "drop table test;");
+
+  ok!(e, "create table t1 (f float, s varchar(10)); create table t2 (s varchar(5), f float);");
+  ok!(e, "insert into t1 values (1, '1'), (3, '3'), (5, '5'), (7, '7');  insert into t2 values ('2', 2), ('4', 4), ('6', 6), ('8', 8);");
+  ok!(e, "select * from t1, t2 where t1.f < t2.f; select * from t1, t2 where t2.s > t1.s;");
+  ok!(e, "select * from t2, t1 where t1.f < t2.f; select * from t2, t1 where t2.s > t1.s;");
+  ok!(e, "drop table t1; drop table t2;");
 }
 
 fn insert() {
@@ -189,19 +197,22 @@ fn delete() {
 
 fn errors() {
   let mut e = Eval::default();
-  err!(e, "^");
-  err!(e, ";");
-  err!(e, "SHOW DATABASE OrderDB; -- typo");
-  err!(e, "use OrderDB; -- typo");
-  ok!(e, "use orderDB; -- ok");
-  err!(e, "CREATE TABLE t (id INT, id INT); -- duplicate -- duplicate");
-  err!(e, "CREATE TABLE customer(id INT(10) NOT NULL); -- duplicate");
-  err!(e, "CREATE TABLE t (id INT(256) NOT NULL); -- u8 overflow");
-  ok!(e, "CREATE TABLE t (id INT(255) NOT NULL); -- ok");
-  err!(e, "insert into t value (2147483648); -- i32 overflow");
-  err!(e, "insert into t values (null);");
-  err!(e, "CREATE TABLE t1 (id INT(255), CHECK (id) IN ('F', 'M')); -- invalid check");
-  ok!(e, "CREATE TABLE t1 (id DATE, CHECK (id) IN ('2019-01-01')); -- ok");
+  err!(e, "^ -- error");
+  err!(e, "; -- error");
+  err!(e, "SHOW DATABASE OrderDB; -- error");
+  err!(e, "use OrderDB; -- error");
+  ok!(e, "use orderDB;");
+  err!(e, "CREATE TABLE customer(id INT(10) NOT NULL); -- error, duplicate");
+  err!(e, "CREATE TABLE t (id INT, id INT); -- error, duplicate");
+  err!(e, "CREATE TABLE t (id INT(256) NOT NULL); -- error, u8 overflow");
+  ok!(e, "CREATE TABLE t (id INT(255) NOT NULL);");
+  err!(e, "insert into t value (2147483648); -- error, i32 overflow");
+  err!(e, "insert into t values (null); -- error");
+  err!(e, "CREATE TABLE t1 (id INT(255), CHECK (id IN ('F', 'M'))); -- error, check ty mismatch");
+  ok!(e, "CREATE TABLE t1 (id DATE, CHECK (id IN ('2019-01-01')));");
+  err!(e, "drop table t2; -- error, no such table");
+  ok!(e, "drop table t;");
+  ok!(e, "drop table t1;");
 }
 
 #[test]

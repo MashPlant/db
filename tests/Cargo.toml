@@ -14,3 +14,4 @@ query = { path = "../query" }
 driver = { path = "../driver" }
 rand = "0.7"
 rand_chacha = "0.2"
+typed-arena = "1.6.1"

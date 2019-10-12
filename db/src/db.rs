@@ -1,10 +1,10 @@
 use std::{fs::{File, OpenOptions}, path::Path};
 use memmap::{MmapOptions, MmapMut};
+use unchecked_unwrap::UncheckedUnwrap;
 
 use physics::*;
 use common::{*, Error::*, BareTy::*};
 use syntax::ast::*;
-use unchecked_unwrap::UncheckedUnwrap;
 use crate::fill_ptr;
 
 pub struct Db {
