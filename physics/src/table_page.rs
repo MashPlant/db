@@ -1,10 +1,12 @@
+use std::{mem::size_of, slice};
+
 use common::{*, Error::*};
 
 bitflags::bitflags! {
   pub struct ColFlags: u8 {
     // PRIMARY implies NOTNULL, but doesn't imply UNIQUE
-    // PRIMARY itself is only useful when their is multiple primary key, if it is a single primary key,
-    // UNIQUE will be set, UNIQUE and NOTNULL will detect all errors
+    // PRIMARY itself is only useful when their are multiple primary keys
+    // if it is only a single primary key, UNIQUE will be set, UNIQUE and NOTNULL will detect all errors
     const PRIMARY = 0b1;
     const NOTNULL = 0b10;
     const UNIQUE = 0b100;
@@ -18,18 +20,24 @@ pub struct ColInfo {
   pub off: u16,
   // index root page id, !0 for none
   pub index: u32,
-  // check page id, !0 for none
+  // `check >> 1` is check page id, `check == !0` for none
+  // if `(check & 1) == 1`, the one-past-last item in check page is the default value
   pub check: u32,
   // index of TablePage, !0 for none
-  pub foreign_table: u32,
-  // index in TablePage::cols, if foreign_table == !0, foreign_col is meaningless
-  pub foreign_col: u8,
+  pub f_table: u32,
+  // index in TablePage::cols, if f_table == !0, f_col is meaningless
+  pub f_col: u8,
   pub flags: ColFlags,
+  // if `index == !0`, below 2 are meaningless
+  // if `index != !0 && idx_name_len == 0`, it is an anonymous index (created by dbms, has no name)
+  pub idx_name_len: u8,
+  pub idx_name: [u8; MAX_IDX_NAME],
   pub name_len: u8,
   pub name: [u8; MAX_COL_NAME],
 }
 
 impl ColInfo {
+  // `idx_name_len` and `idx_name` is not initialized here
   pub unsafe fn init(&mut self, ty: ColTy, off: u16, name: &str, notnull: bool) {
     self.ty = ty;
     self.off = off;
@@ -37,22 +45,23 @@ impl ColInfo {
     self.check = !0;
     self.name_len = name.len() as u8;
     self.name.as_mut_ptr().copy_from_nonoverlapping(name.as_ptr(), name.len());
-    self.flags.set(ColFlags::NOTNULL, notnull);
-    self.foreign_table = !0;
+    self.flags = if notnull { ColFlags::NOTNULL } else { ColFlags::empty() };
+    self.f_table = !0;
   }
 
   pub unsafe fn name<'a>(&self) -> &'a str {
     str_from_parts(self.name.as_ptr(), self.name_len as usize)
   }
+
+  pub unsafe fn idx_name<'a>(&self) -> Option<&'a str> {
+    if self.index != !0 { Some(str_from_parts(self.idx_name.as_ptr(), self.idx_name_len as usize)) } else { None }
+  }
 }
 
 #[repr(C)]
 pub struct TablePage {
-  // the prev and next in both TablePage and DataPage forms a circular linked list
-  // initially table.prev = table.next = table page id, for an empty linked list
-  // they may be accessed by field ref or by [0] and [1]
-  pub prev: u32,
-  pub next: u32,
+  // !0 for none
+  pub first: u32,
   // !0 for none
   pub first_free: u32,
   // there are at most (64G / 16) = 4G records, so u32 is enough
@@ -67,17 +76,16 @@ pub struct TablePage {
   pub cols: [ColInfo; MAX_COL],
 }
 
-pub const MAX_TABLE_NAME: usize = 42;
-pub const MAX_COL_NAME: usize = 45;
+pub const MAX_TABLE_NAME: usize = 46;
+pub const MAX_COL_NAME: usize = 27;
+pub const MAX_IDX_NAME: usize = 17;
 pub const MAX_COL: usize = 127;
 
 impl TablePage {
-  pub unsafe fn init(&mut self, id: u32, size: u16, col_num: u8, name: &str) {
-    (self.prev = id, self.next = id);  // self-circle to represent empty linked list
-    self.first_free = !0;
+  pub unsafe fn init(&mut self, size: u16, col_num: u8, name: &str) {
+    (self.first = !0, self.first_free = !0);
     self.count = 0;
-    self.size = size;
-    self.cap = MAX_DATA_BYTE as u16 / size;
+    (self.size = size, self.cap = MAX_DATA_BYTE as u16 / size);
     self.name_len = name.len() as u8;
     self.name.as_mut_ptr().copy_from_nonoverlapping(name.as_ptr(), name.len());
     self.col_num = col_num;
@@ -88,8 +96,7 @@ impl TablePage {
   }
 
   pub unsafe fn cols<'a>(&self) -> &'a [ColInfo] {
-    debug_assert!(self.col_num < MAX_COL as u8);
-    std::slice::from_raw_parts(self.cols.as_ptr(), self.col_num as usize)
+    slice::from_raw_parts(self.cols.as_ptr(), self.col_num as usize)
   }
 
   pub unsafe fn get_ci<'a, 'b>(&mut self, col: &'b str) -> Result<'b, &'a mut ColInfo> {
@@ -102,6 +109,6 @@ impl TablePage {
 
 #[cfg_attr(tarpaulin, skip)]
 fn _ck() {
-  const_assert_eq!(std::mem::size_of::<ColInfo>(), 64);
-  const_assert_eq!(std::mem::size_of::<TablePage>(), common::PAGE_SIZE);
+  const_assert_eq!(size_of::<ColInfo>(), 64);
+  const_assert_eq!(size_of::<TablePage>(), common::PAGE_SIZE);
 }

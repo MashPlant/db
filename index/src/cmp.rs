@@ -1,6 +1,5 @@
 use std::cmp::Ordering;
 use chrono::NaiveDate;
-use unchecked_unwrap::UncheckedUnwrap;
 
 use common::*;
 use physics::*;
@@ -13,17 +12,14 @@ impl<const T: BareTy> Cmp<{ T }> {
     match T { // should be optimized out
       Bool => (*(l as *const bool)).cmp(&*(r as *const bool)),
       Int => (*(l as *const i32)).cmp(&*(r as *const i32)),
-      // it is safe because lexer only allow float like xxx.xxx comes in, and they are all comparable
-      Float => (*(l as *const f32)).partial_cmp(&*(r as *const f32)).unchecked_unwrap(),
+      Float => fcmp(*(l as *const f32), *(r as *const f32)),
       Date => (*(l as *const NaiveDate)).cmp(&*(r as *const NaiveDate)),
       VarChar => str_from_db(l).cmp(str_from_db(r)),
     }
   }
 
   pub unsafe fn cmp_full(l: *const u8, r: *const u8, rid_off: usize) -> Ordering {
-    let l_rid = *(l.add(rid_off) as *const Rid);
-    let r_rid = *(r.add(rid_off) as *const Rid);
-    Self::cmp(l, r).then(l_rid.cmp(&r_rid))
+    Self::cmp(l, r).then((*(l.add(rid_off) as *const Rid)).cmp(&*(r.add(rid_off) as *const Rid)))
   }
 }
 

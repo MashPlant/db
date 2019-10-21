@@ -1,6 +1,7 @@
 use rustyline::{Editor, Helper, highlight::Highlighter, completion::Completer, hint::Hinter, error::ReadlineError};
 use colored::*;
 use std::{borrow::Cow, str, fs};
+use typed_arena::Arena;
 
 use driver::Eval;
 use syntax::{Lexer, TokenKind};
@@ -21,8 +22,9 @@ impl Highlighter for SqlHelper {
       match token.ty {
         Lt | Le | Ge | Gt | Eq | Ne | LPar | RPar | Add | Sub | Mul | Div | Mod | Comma | Semicolon => {}
         Null | True | False | FloatLit | IntLit | StrLit => ret.replace_range(range, &piece.green().to_string()),
+        Int | Bool | VarChar | Float | Date => ret.replace_range(range, &piece.cyan().to_string()),
         Sum | Avg | Min | Max | Count => ret.replace_range(range, &piece.yellow().to_string()),
-        Id | Dot => ret.replace_range(range, &piece.purple().to_string()),
+        Id1 | Dot => ret.replace_range(range, &piece.purple().to_string()),
         _Err | _Eof => break ret.into(),
         _ => ret.replace_range(range, &piece.blue().bold().to_string()),
       }
@@ -63,7 +65,7 @@ fn main() {
             OUTPUT => output = words.next().map(|x| x.to_owned()),
             READ => if let Some(file) = words.next() {
               if let Ok(input) = fs::read_to_string(file) {
-                if let Err(e) = e.exec_all(&input, |_| {}, |_| {}) { eprintln!("Error: {:?}", e); }
+                if let Err(e) = e.exec_all(&input, &Arena::default(), |_| {}, |_| {}) { eprintln!("Error: {:?}", e); }
               } else { eprintln!("Error: fails to read from {}", file); }
             } else { eprintln!("Usage: {} <file>", READ); }
             COLOR => if let Some(color) = words.next().and_then(|x| x.parse().ok()) {
@@ -75,7 +77,7 @@ fn main() {
           cur += line;
           cur.push('\n');
           if line.contains(';') {
-            if let Err(e) = e.exec_all(&cur, |_| {}, |x| if !x.is_empty() {
+            if let Err(e) = e.exec_all(&cur, &Arena::default(), |_| {}, |x| if !x.is_empty() {
               if let Some(output) = &output {
                 if fs::write(output, x).is_err() { eprintln!("Error: fails to write to {}", output); }
               } else { println!("{}", x); }

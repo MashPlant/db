@@ -10,3 +10,4 @@ physics = { path = "../physics" }
 db = { path = "../db" }
 chrono = "0.4"
 unchecked_unwrap = "1.0.1"
+syntax = { path = "../syntax" }

@@ -1,5 +1,6 @@
 use std::str::{self, FromStr};
 use typed_arena::Arena;
+use either::Either::{self, Left as L, Right as R};
 
 use common::{BareTy::{*, self}, ParserError as PE, ParserErrorKind::*, Lit, CLit, ColTy, AggOp::*, BinOp::*, CmpOp::*};
 use crate::ast::*;
@@ -30,6 +31,9 @@ impl<'p> Token<'p> {
   }
 }
 
+type Field<'p> = Either<ColDecl<'p>, ColCons<'p>>;
+type FieldList<'p> = (Vec<ColDecl<'p>>, Vec<ColCons<'p>>);
+
 #[parser_macros::lalr1(Program)]
 #[use_unsafe]
 #[lex(r##"
@@ -51,19 +55,21 @@ priority = [
 '(u|U)(s|S)(e|E)' = 'Use'
 '(s|S)(h|H)(o|O)(w|W)' = 'Show'
 '(d|D)(e|E)(s|S)(c|C)' = 'Desc'
+'(a|A)(l|L)(t|T)(e|E)(r|R)\s+(t|T)(a|A)(b|B)(l|L)(e|E)' = 'AlterTable'
+'(a|A)(d|D)(d|D)' = 'Add1'
+'(r|R)(e|E)(n|N)(a|A)(m|M)(e|E)\s+(t|T)(o|O)' = 'RenameTo'
 '(d|D)(a|A)(t|T)(a|A)(b|B)(a|A)(s|S)(e|E)(s|S)' = 'DataBases'
 '(d|D)(a|A)(t|T)(a|A)(b|B)(a|A)(s|S)(e|E)' = 'DataBase'
 '(t|T)(a|A)(b|B)(l|L)(e|E)(s|S)' = 'Tables'
 '(t|T)(a|A)(b|B)(l|L)(e|E)' = 'Table'
 '(s|S)(e|E)(l|L)(e|E)(c|C)(t|T)' = 'Select'
 '(d|D)(e|E)(l|L)(e|E)(t|T)(e|E)' = 'Delete'
-'(i|I)(n|N)(s|S)(e|E)(r|R)(t|T)' = 'Insert'
+'(i|I)(n|N)(s|S)(e|E)(r|R)(t|T)\s+(i|I)(n|N)(t|T)(o|O)' = 'InsertInto'
 '(u|U)(p|P)(d|D)(a|A)(t|T)(e|E)' = 'Update'
 '(v|V)(a|A)(l|L)(u|U)(e|E)(s|S)' = 'Values'
 '(r|R)(e|E)(f|F)(e|E)(r|R)(e|E)(n|N)(c|C)(e|E)(s|S)' = 'References'
 '(s|S)(e|E)(t|T)' = 'Set'
 '(f|F)(r|R)(o|O)(m|M)' = 'From'
-'(i|I)(n|N)(t|T)(o|O)' = 'Into'
 '(w|W)(h|H)(e|E)(r|R)(e|E)' = 'Where'
 '(s|S)(u|U)(m|M)' = 'Sum'
 '(a|A)(v|V)(g|G)' = 'Avg'
@@ -71,19 +77,23 @@ priority = [
 '(m|M)(a|A)(x|X)' = 'Max'
 '(c|C)(o|O)(u|U)(n|N)(t|T)' = 'Count'
 '(n|N)(o|O)(t|T)\s+(n|N)(u|U)(l|L)(l|L)' = 'NotNull'
-'(p|P)(r|R)(i|I)(m|M)(a|A)(r|R)(y|Y)' = 'Primary'
-'(f|F)(o|O)(r|R)(e|E)(i|I)(g|G)(n|N)' = 'Foreign'
+'(p|P)(r|R)(i|I)(m|M)(a|A)(r|R)(y|Y)\s+(k|K)(e|E)(y|Y)' = 'PrimaryKey'
+'(f|F)(o|O)(r|R)(e|E)(i|I)(g|G)(n|N)\s+(k|K)(e|E)(y|Y)' = 'ForeignKey'
 '(u|U)(n|N)(i|I)(q|Q)(u|U)(e|E)' = 'Unique'
-'(k|K)(e|E)(y|Y)' = 'Key'
 '(l|L)(i|I)(k|K)(e|E)' = 'Like'
 '(i|I)(n|N)(d|D)(e|E)(x|X)' = 'Index'
 '(c|C)(h|H)(e|E)(c|C)(k|K)' = 'Check'
+'(d|D)(e|E)(f|F)(a|A)(u|U)(l|L)(t|T)' = 'Default'
 '(i|I)(n|N)' = 'In'
+'(o|O)(n|N)' = 'On'
 '(i|I)(s|S)' = 'Is'
+'(b|B)(i|I)(g|G)(i|I)(n|N)(t|T)' = 'Int' # handle bigint as int, char as varchar, decimal as float
+'(i|I)(n|N)(t|T)(e|E)(g|G)(e|E)(r|R)' = 'Int'
 '(i|I)(n|N)(t|T)' = 'Int'
 '(b|B)(o|O)(o|O)(l|L)' = 'Bool'
-'(c|C)(h|H)(a|A)(r|R)' = 'VarChar' # we won't handle char specially, just use varchar
+'(c|C)(h|H)(a|A)(r|R)' = 'VarChar'
 '(v|V)(a|A)(r|R)(c|C)(h|H)(a|A)(r|R)' = 'VarChar'
+'(d|D)(e|E)(c|C)(i|I)(m|M)(a|A)(l|L)' = 'Float'
 '(f|F)(l|L)(o|O)(a|A)(t|T)' = 'Float'
 '(d|D)(a|A)(t|T)(e|E)' = 'Date'
 '(a|A)(n|N)(d|D)' = 'And'
@@ -96,7 +106,7 @@ priority = [
 '>=' = 'Ge'
 '>' = 'Gt'
 '=' = 'Eq'
-'(<>)(!=)' = 'Ne'
+'(<>)|(!=)' = 'Ne'
 '\(' = 'LPar'
 '\)' = 'RPar'
 '\+' = 'Add'
@@ -112,10 +122,13 @@ priority = [
 '-?\d+\.\d*' = 'FloatLit'
 '-?\d+' = 'IntLit'
 "'(('')|[^'])*'" = 'StrLit'
-'[A-Za-z]\w*' = 'Id'
+'[A-Za-z]\w*' = 'Id1'
 '.' = '_Err'
 "##)]
 impl<'p> Parser<'p> {
+  #[rule(Id -> Id1)]
+  fn id(t: Token) -> &'p str { t.str() }
+
   #[rule(Program ->)]
   fn stmt_list0() -> Vec<Stmt<'p>> { vec![] }
   #[rule(Program -> Program Stmt Semicolon)]
@@ -124,55 +137,58 @@ impl<'p> Parser<'p> {
   #[rule(Stmt -> Show DataBases)]
   fn stmt_show_dbs(_: Token, _: Token) -> Stmt<'p> { Stmt::ShowDbs }
   #[rule(Stmt -> Show DataBase Id)]
-  fn stmt_show_db(_: Token, _: Token, t: Token) -> Stmt<'p> { Stmt::ShowDb(t.str()) }
+  fn stmt_show_db(_: Token, _: Token, db: &'p str) -> Stmt<'p> { Stmt::ShowDb(db) }
   #[rule(Stmt -> Create DataBase Id)]
-  fn stmt_create_db(_: Token, _: Token, t: Token) -> Stmt<'p> { Stmt::CreateDb(t.str()) }
+  fn stmt_create_db(_: Token, _: Token, db: &'p str) -> Stmt<'p> { Stmt::CreateDb(db) }
   #[rule(Stmt -> Drop DataBase Id)]
-  fn stmt_drop_db(_: Token, _: Token, t: Token) -> Stmt<'p> { Stmt::DropDb(t.str()) }
+  fn stmt_drop_db(_: Token, _: Token, db: &'p str) -> Stmt<'p> { Stmt::DropDb(db) }
   #[rule(Stmt -> Use Id)]
-  fn stmt_use_db(_: Token, t: Token) -> Stmt<'p> { Stmt::UseDb(t.str()) }
+  fn stmt_use_db(_: Token, db: &'p str) -> Stmt<'p> { Stmt::UseDb(db) }
   #[rule(Stmt -> Drop Table Id)]
-  fn stmt_drop_table(_: Token, _: Token, t: Token) -> Stmt<'p> { Stmt::DropTable(t.str()) }
-  #[rule(Stmt -> Create Index Id LPar Id RPar)]
-  fn stmt_create_index(_: Token, _: Token, t: Token, _: Token, c: Token, _: Token) -> Stmt<'p> { Stmt::CreateIndex { table: t.str(), col: c.str() } }
-  #[rule(Stmt -> Drop Index Id LPar Id RPar)]
-  fn stmt_drop_index(_: Token, _: Token, t: Token, _: Token, c: Token, _: Token) -> Stmt<'p> { Stmt::DropIndex { table: t.str(), col: c.str() } }
-  #[rule(Stmt -> Create Table Id LPar ColDeclList ConsListM RPar)]
-  fn stmt_create_table(_: Token, _: Token, t: Token, _: Token, cols: Vec<ColDecl<'p>>, cons: Vec<TableCons<'p>>, _: Token) -> Stmt<'p> { Stmt::CreateTable(CreateTable { name: t.str(), cols, cons }) }
+  fn stmt_drop_table(_: Token, _: Token, table: &'p str) -> Stmt<'p> { Stmt::DropTable(table) }
+  #[rule(Stmt -> Create Index Id On Id LPar Id RPar)]
+  fn stmt_create_index(_: Token, _: Token, index: &'p str, _: Token, table: &'p str, _: Token, col: &'p str, _: Token) -> Stmt<'p> { CreateIndex { index, table, col }.into() }
+  #[rule(Stmt -> Drop Index Id)]
+  fn stmt_drop_index(_: Token, _: Token, index: &'p str) -> Stmt<'p> { DropIndex { index, table: None }.into() }
+  #[rule(Stmt -> Create Table Id LPar FieldList RPar)]
+  fn stmt_create_table(_: Token, _: Token, table: &'p str, _: Token, (cols, mut cons): FieldList<'p>, _: Token) -> Stmt<'p> { CreateTable { table, cols, cons }.into() }
   #[rule(Stmt -> Show Tables)]
   fn stmt_show_tables(_: Token, _: Token) -> Stmt<'p> { Stmt::ShowTables }
   #[rule(Stmt -> Desc Id)]
-  fn stmt_show_table(_: Token, t: Token) -> Stmt<'p> { Stmt::ShowTable(t.str()) }
+  fn stmt_show_table(_: Token, table: &'p str) -> Stmt<'p> { Stmt::ShowTable(table) }
   #[rule(Stmt -> Select Mul From IdList WhereM)]
-  fn stmt_select0(_: Token, _: Token, _: Token, tables: Vec<&'p str>, where_: Vec<Cond<'p>>) -> Stmt<'p> { Stmt::Select(Select { ops: None, tables, where_ }) }
+  fn stmt_select0(_: Token, _: Token, _: Token, tables: Vec<&'p str>, where_: Vec<Cond<'p>>) -> Stmt<'p> { Select { ops: None, tables, where_ }.into() }
   #[rule(Stmt -> Select AggList From IdList WhereM)]
-  fn stmt_select1(_: Token, ops: Vec<Agg<'p>>, _: Token, tables: Vec<&'p str>, where_: Vec<Cond<'p>>) -> Stmt<'p> { Stmt::Select(Select { ops: Some(ops), tables, where_ }) }
-  #[rule(Stmt -> Insert Into Id Values LitListList)]
-  fn stmt_insert(_: Token, _: Token, t: Token, _: Token, vals: Vec<Vec<CLit<'p>>>) -> Stmt<'p> { Stmt::Insert(Insert { table: t.str(), vals }) }
+  fn stmt_select1(_: Token, ops: Vec<Agg<'p>>, _: Token, tables: Vec<&'p str>, where_: Vec<Cond<'p>>) -> Stmt<'p> { Select { ops: Some(ops), tables, where_ }.into() }
+  #[rule(Stmt -> InsertInto Id Values LitListList)]
+  fn stmt_insert0(_: Token, table: &'p str, _: Token, vals: Vec<Vec<CLit<'p>>>) -> Stmt<'p> { Insert { table, cols: None, vals }.into() }
+  #[rule(Stmt -> InsertInto Id LPar IdList RPar Values LitListList)]
+  fn stmt_insert1(_: Token, table: &'p str, _: Token, cols: Vec<&'p str>, _: Token, _: Token, vals: Vec<Vec<CLit<'p>>>) -> Stmt<'p> { Insert { table, cols: Some(cols), vals }.into() }
   #[rule(Stmt -> Update Id Set SetList WhereM)]
-  fn stmt_update(_: Token, t: Token, _: Token, sets: Vec<(&'p str, Expr<'p>)>, where_: Vec<Cond<'p>>) -> Stmt<'p> { Stmt::Update(Update { table: t.str(), sets, where_ }) }
+  fn stmt_update(_: Token, table: &'p str, _: Token, sets: Vec<(&'p str, Expr<'p>)>, where_: Vec<Cond<'p>>) -> Stmt<'p> { Update { table, sets, where_ }.into() }
   #[rule(Stmt -> Delete From Id WhereM)]
-  fn stmt_delete(_: Token, _: Token, t: Token, where_: Vec<Cond<'p>>) -> Stmt<'p> { Stmt::Delete(Delete { table: t.str(), where_ }) }
+  fn stmt_delete(_: Token, _: Token, table: &'p str, where_: Vec<Cond<'p>>) -> Stmt<'p> { Delete { table, where_ }.into() }
 
-  #[rule(WhereM -> Where WhereList)]
+  #[rule(Stmt -> AlterTable Id Add1 Index Id On LPar Id RPar)]
+  fn alter_create_index1(_: Token, table: &'p str, _: Token, _: Token, index: &'p str, _: Token, _: Token, col: &'p str, _: Token) -> Stmt<'p> { CreateIndex { index, table, col }.into() }
+  #[rule(Stmt -> AlterTable Id Drop Index Id)]
+  fn alter_drop_index1(_: Token, table: &'p str, _: Token, _: Token, index: &'p str) -> Stmt<'p> { DropIndex { index, table: Some(table) }.into() }
+  #[rule(Stmt -> AlterTable Id RenameTo Id)]
+  fn alter_rename(_: Token, old: &'p str, _: Token, new: &'p str) -> Stmt<'p> { Stmt::Rename { old, new } }
+  #[rule(Stmt -> AlterTable Id Add1 ForeignKey LPar Id RPar References Id LPar Id RPar)]
+  fn alter_add_foreign(_: Token, table: &'p str, _: Token, _: Token, _: Token, col: &'p str, _: Token, _: Token, f_table: &'p str, _: Token, f_col: &'p str, _: Token) -> Stmt<'p> { AddForeign { table, col, f_table, f_col }.into() }
+  #[rule(Stmt -> AlterTable Id Drop ForeignKey Id)]
+  fn alter_drop_foreign(_: Token, table: &'p str, _: Token, _: Token, col: &'p str) -> Stmt<'p> { Stmt::DropForeign { table, col } }
+
+  #[rule(WhereM -> Where CondList)]
   fn where_m1(_: Token, where_: Vec<Cond<'p>>) -> Vec<Cond<'p>> { where_ }
   #[rule(WhereM ->)]
   fn where_m0() -> Vec<Cond<'p>> { vec![] }
 
-  #[rule(ConsListM ->)]
-  fn cons_list_m0() -> Vec<TableCons<'p>> { vec![] }
-  #[rule(ConsListM -> Comma ConsList)]
-  fn cons_list_m1(_: Token, cl: Vec<TableCons<'p>>) -> Vec<TableCons<'p>> { cl }
-
-  #[rule(NotNullM ->)]
-  fn not_null_m0() -> bool { false }
-  #[rule(NotNullM -> NotNull)]
-  fn not_null_m1(_: Token) -> bool { true }
-
   #[rule(IdList -> Id)]
-  fn id_list0(t: Token) -> Vec<&'p str> { vec![t.str()] }
+  fn id_list0(i: &'p str) -> Vec<&'p str> { vec![i] }
   #[rule(IdList -> IdList Comma Id)]
-  fn id_list1(mut il: Vec<&'p str>, _: Token, t: Token) -> Vec<&'p str> { (il.push(t.str()), il).1 }
+  fn id_list1(mut il: Vec<&'p str>, _: Token, i: &'p str) -> Vec<&'p str> { (il.push(i), il).1 }
 
   #[rule(AggList -> Agg)]
   fn agg_list0(a: Agg<'p>) -> Vec<Agg<'p>> { vec![a] }
@@ -193,65 +209,68 @@ impl<'p> Parser<'p> {
   fn expr_atom(a: Atom<'p>) -> Expr<'p> { Expr::Atom(a) }
   #[rule(Expr -> Sub Expr)]
   #[prec(UMinus)]
-  fn expr_neg(_: Token, e: Expr<'p>) -> Expr<'p> { Expr::Neg(Box::new(e)) }
+  fn expr_neg(_: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Sub, box (Expr::Atom(Atom::Lit(CLit::new(Lit::Number(0.0)))), r)) }
   #[rule(Expr -> Expr Add Expr)]
-  fn expr_add(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Add, Box::new((l, r))) }
+  fn expr_add(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Add, box (l, r)) }
   #[rule(Expr -> Expr Sub Expr)]
-  fn expr_sub(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Sub, Box::new((l, r))) }
+  fn expr_sub(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Sub, box (l, r)) }
   #[rule(Expr -> Expr Mul Expr)]
-  fn expr_mul(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Mul, Box::new((l, r))) }
+  fn expr_mul(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Mul, box (l, r)) }
   #[rule(Expr -> Expr Div Expr)]
-  fn expr_div(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Div, Box::new((l, r))) }
+  fn expr_div(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Div, box (l, r)) }
   #[rule(Expr -> Expr Mod Expr)]
-  fn expr_mod(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Mod, Box::new((l, r))) }
+  fn expr_mod(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Bin(Mod, box (l, r)) }
   #[rule(Expr -> LPar Expr RPar)]
   fn expr_par(_: Token, e: Expr<'p>, _: Token) -> Expr<'p> { e }
   #[rule(Expr -> Expr Lt Expr)]
-  fn expr_lt(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Cmp(Lt, Box::new((l, r))) }
+  fn expr_lt(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Cmp(Lt, box (l, r)) }
   #[rule(Expr -> Expr Le Expr)]
-  fn expr_le(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Cmp(Le, Box::new((l, r))) }
+  fn expr_le(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Cmp(Le, box (l, r)) }
   #[rule(Expr -> Expr Ge Expr)]
-  fn expr_ge(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Cmp(Ge, Box::new((l, r))) }
+  fn expr_ge(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Cmp(Ge, box (l, r)) }
   #[rule(Expr -> Expr Gt Expr)]
-  fn expr_gt(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Cmp(Gt, Box::new((l, r))) }
+  fn expr_gt(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Cmp(Gt, box (l, r)) }
   #[rule(Expr -> Expr Eq Expr)]
-  fn expr_eq(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Cmp(Eq, Box::new((l, r))) }
+  fn expr_eq(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Cmp(Eq, box (l, r)) }
   #[rule(Expr -> Expr Ne Expr)]
-  fn expr_ne(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Cmp(Ne, Box::new((l, r))) }
+  fn expr_ne(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Cmp(Ne, box (l, r)) }
   #[rule(Expr -> Expr And Expr)]
-  fn expr_and(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::And(Box::new((l, r))) }
+  fn expr_and(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::And(box (l, r)) }
   #[rule(Expr -> Expr Or Expr)]
-  fn expr_or(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Or(Box::new((l, r))) }
+  fn expr_or(l: Expr<'p>, _: Token, r: Expr<'p>) -> Expr<'p> { Expr::Or(box (l, r)) }
   #[rule(Expr -> Expr Is Null)]
-  fn expr_is_null(e: Expr<'p>, _: Token, _: Token) -> Expr<'p> { Expr::Null(Box::new(e), true) }
+  fn expr_is_null(e: Expr<'p>, _: Token, _: Token) -> Expr<'p> { Expr::Null(box e, true) }
   #[rule(Expr -> Expr Is NotNull)]
-  fn expr_is_not_null(e: Expr<'p>, _: Token, _: Token) -> Expr<'p> { Expr::Null(Box::new(e), false) }
+  fn expr_is_not_null(e: Expr<'p>, _: Token, _: Token) -> Expr<'p> { Expr::Null(box e, false) }
   #[rule(Expr -> Expr Like StrLit)]
-  fn expr_like(&self, e: Expr<'p>, _: Token, s: Token) -> Expr<'p> { Expr::Like(Box::new(e), self.escape(s.str_trim())) }
+  fn expr_like(&self, e: Expr<'p>, _: Token, s: Token) -> Expr<'p> { Expr::Like(box e, self.escape(s.str_trim())) }
 
   #[rule(SetList -> Id Eq Expr)]
-  fn set_list0(t: Token, _: Token, l: Expr<'p>) -> Vec<(&'p str, Expr<'p>)> { vec![(t.str(), l)] }
+  fn set_list0(col: &'p str, _: Token, l: Expr<'p>) -> Vec<(&'p str, Expr<'p>)> { vec![(col, l)] }
   #[rule(SetList -> SetList Comma Id Eq Expr)]
-  fn set_list1(mut sl: Vec<(&'p str, Expr<'p>)>, _: Token, t: Token, _: Token, l: Expr<'p>) -> Vec<(&'p str, Expr<'p>)> { (sl.push((t.str(), l)), sl).1 }
+  fn set_list1(mut sl: Vec<(&'p str, Expr<'p>)>, _: Token, col: &'p str, _: Token, r: Expr<'p>) -> Vec<(&'p str, Expr<'p>)> { (sl.push((col, r)), sl).1 }
 
-  #[rule(ColDeclList -> Id ColTy NotNullM)]
-  fn col_decl_list0(t: Token, ty: ColTy, notnull: bool) -> Vec<ColDecl<'p>> { vec![ColDecl { name: t.str(), ty, notnull }] }
-  #[rule(ColDeclList -> ColDeclList Comma Id ColTy NotNullM)]
-  fn col_decl_list1(mut cl: Vec<ColDecl<'p>>, _: Token, t: Token, ty: ColTy, notnull: bool) -> Vec<ColDecl<'p>> { (cl.push(ColDecl { name: t.str(), ty, notnull }), cl).1 }
+  #[rule(FieldList -> Field)]
+  fn field_list0(f: Field<'p>) -> FieldList<'p> { match f { L(l) => (vec![l], vec![]), R(r) => (vec![], vec![r]) } }
+  #[rule(FieldList -> FieldList Comma Field)]
+  fn field_list1((mut cols, mut cons): FieldList<'p>, _: Token, f: Field<'p>) -> FieldList<'p> { (match f { L(l) => cols.push(l), R(r) => cons.push(r) }, (cols, cons)).1 }
 
-  #[rule(ConsList -> Cons)]
-  fn cons_list0(c: Vec<TableCons<'p>>) -> Vec<TableCons<'p>> { c }
-  #[rule(ConsList -> ConsList Comma Cons)]
-  fn cons_list1(mut cl: Vec<TableCons<'p>>, _: Token, mut c: Vec<TableCons<'p>>) -> Vec<TableCons<'p>> { (cl.append(&mut c), cl).1 }
-
-  #[rule(Cons -> Foreign Key LPar Id RPar References Id LPar Id RPar)]
-  fn cons_foreign(_: Token, _: Token, _: Token, t: Token, _: Token, _: Token, table: Token, _: Token, col: Token, _: Token) -> Vec<TableCons<'p>> { vec![TableCons { name: t.str(), kind: TableConsKind::Foreign { table: table.str(), col: col.str() } }] }
-  #[rule(Cons -> Primary Key LPar IdList RPar)]
-  fn cons_primary(_: Token, _: Token, _: Token, il: Vec<&'p str>, _: Token) -> Vec<TableCons<'p>> { il.into_iter().map(|name| TableCons { name, kind: TableConsKind::Primary }).collect() }
-  #[rule(Cons -> Unique LPar Id RPar)]
-  fn cons_unique(_: Token, _: Token, t: Token, _: Token) -> Vec<TableCons<'p>> { vec![TableCons { name: t.str(), kind: TableConsKind::Unique }] }
-  #[rule(Cons -> Check LPar Id In LPar LitList RPar RPar)]
-  fn cons_check(_: Token, _: Token, t: Token, _: Token, _: Token, ll: Vec<CLit<'p>>, _: Token, _: Token) -> Vec<TableCons<'p>> { vec![TableCons { name: t.str(), kind: TableConsKind::Check(ll) }] }
+  #[rule(Field -> Id ColTy)]
+  fn field0(col: &'p str, ty: ColTy) -> Field<'p> { L(ColDecl { col, ty, notnull: false, dft: None }) }
+  #[rule(Field -> Id ColTy NotNull)]
+  fn field1(col: &'p str, ty: ColTy, _: Token) -> Field<'p> { L(ColDecl { col, ty, notnull: true, dft: None }) }
+  #[rule(Field -> Id ColTy Default Lit)]
+  fn field2(col: &'p str, ty: ColTy, _: Token, dft: CLit<'p>) -> Field<'p> { L(ColDecl { col, ty, notnull: false, dft: Some(dft) }) }
+  #[rule(Field -> Id ColTy NotNull Default Lit)]
+  fn field3(col: &'p str, ty: ColTy, _: Token, _: Token, dft: CLit<'p>) -> Field<'p> { L(ColDecl { col, ty, notnull: true, dft: Some(dft) }) }
+  #[rule(Field -> ForeignKey LPar Id RPar References Id LPar Id RPar)]
+  fn field5(_: Token, _: Token, col: &'p str, _: Token, _: Token, f_table: &'p str, _: Token, f_col: &'p str, _: Token) -> Field<'p> { R(ColCons::Foreign { col, f_table, f_col }) }
+  #[rule(Field -> PrimaryKey LPar IdList RPar)]
+  fn field6(_: Token, _: Token, il: Vec<&'p str>, _: Token) -> Field<'p> { R(ColCons::Primary(il)) }
+  #[rule(Field -> Unique LPar Id RPar)]
+  fn field7(_: Token, _: Token, col: &'p str, _: Token) -> Field<'p> { R(ColCons::Unique(col)) }
+  #[rule(Field -> Check LPar Id In LPar LitList RPar RPar)]
+  fn field8(_: Token, _: Token, col: &'p str, _: Token, _: Token, ll: Vec<CLit<'p>>, _: Token, _: Token) -> Field<'p> { R(ColCons::Check(col, ll)) }
 
   #[rule(Agg -> ColRef)]
   fn agg0(col: ColRef<'p>) -> Agg<'p> { Agg { col, op: None } }
@@ -271,13 +290,13 @@ impl<'p> Parser<'p> {
   fn agg_count_all(_: Token, _: Token, _: Token, _: Token) -> Agg<'p> { Agg { col: ColRef { table: None, col: "*" }, op: Some(CountAll) } }
 
   #[rule(ColRef -> Id)]
-  fn col_ref0(c: Token) -> ColRef<'p> { ColRef { table: None, col: c.str() } }
+  fn col_ref0(col: &'p str) -> ColRef<'p> { ColRef { table: None, col } }
   #[rule(ColRef -> Id Dot Id)]
-  fn col_ref1(t: Token, _: Token, c: Token) -> ColRef<'p> { ColRef { table: Some(t.str()), col: c.str() } }
+  fn col_ref1(table: &'p str, _: Token, col: &'p str) -> ColRef<'p> { ColRef { table: Some(table), col } }
 
-  #[rule(WhereList -> WhereList And Cond)]
+  #[rule(CondList -> CondList And Cond)]
   fn where1(mut cl: Vec<Cond<'p>>, _: Token, c: Cond<'p>) -> Vec<Cond<'p>> { (cl.push(c), cl).1 }
-  #[rule(WhereList -> Cond)]
+  #[rule(CondList -> Cond)]
   fn where0(c: Cond<'p>) -> Vec<Cond<'p>> { vec![c] }
 
   #[rule(Cond -> ColRef Lt Atom)]

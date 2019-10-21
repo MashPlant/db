@@ -1,4 +1,4 @@
-use std::{str, slice, alloc::{alloc, dealloc, Layout}};
+use std::{str, slice, alloc::{alloc, dealloc, Layout}, marker::Sized};
 
 pub trait Ptr2Ref {
   type Target;
@@ -11,7 +11,7 @@ pub trait Ref2PtrMut where Self: Sized {
 
   unsafe fn idx(self, arr: &[Self::Target]) -> u32 { (self.p()).offset_from(arr.as_ptr()) as u32 }
   // pr for p().r()
-  unsafe fn pr<'a>(self) -> &'a mut Self::Target where Self: std::marker::Sized { self.p().r() }
+  unsafe fn pr<'a>(self) -> &'a mut Self::Target where Self: Sized { self.p().r() }
 }
 
 impl<T> Ptr2Ref for *mut T {

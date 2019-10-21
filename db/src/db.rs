@@ -3,7 +3,7 @@ use memmap::{MmapOptions, MmapMut};
 use unchecked_unwrap::UncheckedUnwrap;
 
 use physics::*;
-use common::{*, Error::*, BareTy::*};
+use common::{*, Error::*};
 use syntax::ast::*;
 use crate::fill_ptr;
 
@@ -50,56 +50,57 @@ impl Db {
 
       // validate table and cols
       if dp.table_num == MAX_TABLE as u16 { return Err(TableExhausted); }
-      if c.name.len() >= MAX_TABLE_NAME { return Err(TableNameTooLong(c.name)); }
-      if self.get_tp(c.name).is_ok() { return Err(DupTable(c.name)); }
-      if c.cols.len() >= MAX_COL { return Err(ColTooMany(c.cols.len())); }
+      if c.table.len() > MAX_TABLE_NAME { return Err(TableNameTooLong(c.table)); }
+      if self.get_tp(c.table).is_ok() { return Err(DupTable(c.table)); }
+      if c.cols.len() > MAX_COL { return Err(ColTooMany(c.cols.len())); }
       // its V will be used later to validate col cons, only allow one primary / foreign / check for one col
       let mut cols = IndexMap::default();
-      for co in &c.cols {
-        if cols.insert(co.name, (false, false, false, false)).is_some() { return Err(DupCol(co.name)); }
-        if co.name.len() >= MAX_COL_NAME { return Err(ColNameTooLong(co.name)); }
+      for cd in &c.cols {
+        if cols.insert(cd.col, (false, false, false, false)).is_some() { return Err(DupCol(cd.col)); }
+        if cd.col.len() > MAX_COL_NAME { return Err(ColNameTooLong(cd.col)); }
       }
 
       // validate col cons
       let mut primary_cnt = 0;
       for cons in &c.cons {
-        if let Some((idx, _, has_pfuc)) = cols.get_full_mut(cons.name) {
-          match &cons.kind {
-            TableConsKind::Primary => {
-              if has_pfuc.0 { return Err(DupPrimary(cons.name)); }
-              has_pfuc.0 = true;
-              primary_cnt += 1;
-            }
-            &TableConsKind::Foreign { table, col } => {
-              if has_pfuc.1 { return Err(DupForeign(cons.name)); }
-              has_pfuc.1 = true;
-              let ci = self.get_tp(table)?.1.get_ci(col)?;
-              if !ci.flags.contains(ColFlags::UNIQUE) { return Err(ForeignKeyOnNonUnique(col)); }
-              let (f_ty, ty) = (ci.ty, c.cols[idx].ty);
-              // maybe too strict here, don't allow foreign link between two types or shorter string to longer string (for simplicity of future handling)
-              match (f_ty.ty, ty.ty) {
-                (VarChar, VarChar) if ty.size >= f_ty.size => {}
-                (Bool, Bool) | (Int, Int) | (Float, Float) | (Date, Date) => {}
-                _ => return Err(IncompatibleForeignTy { foreign: f_ty, own: ty }),
-              }
-            }
-            TableConsKind::Unique => {
-              if has_pfuc.2 { return Err(DupUnique(cons.name)); }
-              has_pfuc.2 = true;
-            }
-            TableConsKind::Check(check) => {
-              if has_pfuc.3 { return Err(DupCheck(cons.name)); }
-              has_pfuc.3 = true;
-              let ty = c.cols[idx].ty;
-              let sz = ty.size() as usize;
-              if check.len() * sz >= MAX_CHECK_BYTES { return Err(CheckTooLong(cons.name, check.len())); }
-              let buf = Align4U8::new(ty.size() as usize); // dummy buffer
-              for &c in check {
-                if c.is_null() { return Err(CheckNull(cons.name)); } else { fill_ptr(buf.ptr, ty, c)?; }
-              }
+        match cons {
+          ColCons::Primary(cols1) => for col in cols1 {
+            let (_, _, has_pfuc) = if let Some(x) = cols.get_full_mut(col) { x } else { return Err(NoSuchCol(col)); };
+            if (has_pfuc.0, has_pfuc.0 = true).0 { return Err(DupConstraint(col)); }
+            primary_cnt += 1;
+          }
+          ColCons::Foreign { col, f_table, f_col } => {
+            let (idx, _, has_pfuc) = if let Some(x) = cols.get_full_mut(col) { x } else { return Err(NoSuchCol(col)); };
+            if (has_pfuc.1, has_pfuc.1 = true).0 { return Err(DupConstraint(col)); }
+            let f_ci = self.get_tp(f_table)?.1.get_ci(f_col)?;
+            if !f_ci.flags.contains(ColFlags::UNIQUE) { return Err(ForeignOnNotUnique(f_col)); }
+            let (foreign, own) = (f_ci.ty, c.cols.get_unchecked(idx).ty);
+            if foreign != own { return Err(IncompatibleForeignTy { foreign, own }); };
+          }
+          ColCons::Unique(col) => {
+            let (_, _, has_pfuc) = if let Some(x) = cols.get_full_mut(col) { x } else { return Err(NoSuchCol(col)); };
+            if (has_pfuc.2, has_pfuc.2 = true).0 { return Err(DupConstraint(col)); }
+          }
+          ColCons::Check(col, check) => {
+            let (idx, _, has_pfuc) = if let Some(x) = cols.get_full_mut(col) { x } else { return Err(NoSuchCol(col)); };
+            if (has_pfuc.3, has_pfuc.3 = true).0 { return Err(DupConstraint(col)); }
+            let cd = c.cols.get_unchecked(idx);
+            let sz = cd.ty.size() as usize;
+            // default value will use one slot in check page
+            if sz * (check.len() + (cd.dft.is_some() as usize)) > MAX_CHECK_BYTES { return Err(CheckTooLong(col)); }
+            let buf = Align4U8::new(sz); // dummy buffer, only for typeck
+            for &c in check {
+              if c.is_null() { return Err(CheckNull(col)); } else { fill_ptr(buf.ptr, cd.ty, c)?; }
             }
           }
-        } else { return Err(NoSuchCol(cons.name)); }
+        }
+      }
+      for col in &c.cols {
+        if let Some(dft) = col.dft {
+          if !dft.is_null() {
+            fill_ptr(Align4U8::new(col.ty.size() as usize).ptr, col.ty, dft)?;
+          }
+        }
       }
 
       // validate size, the size is calculated in the same way as below
@@ -118,40 +119,54 @@ impl Db {
       let mut size = (c.cols.len() as u16 + 31) / 32 * 4; // null bitset
       for (i, c) in c.cols.iter().enumerate() {
         if c.ty.align4() { size = (size + 3) & !3; }
-        tp.cols.get_unchecked_mut(i).init(c.ty, size, c.name, c.notnull);
+        tp.cols.get_unchecked_mut(i).init(c.ty, size, c.col, c.notnull);
         size += c.ty.size();
       }
       size = (size + 3) & !3; // at last it should be aligned to keep the alignment of the next slot
-      tp.init(id, size.max(MIN_SLOT_SIZE as u16), c.cols.len() as u8, c.name);
+      tp.init(size.max(MIN_SLOT_SIZE as u16), c.cols.len() as u8, c.table);
 
       // handle table cons
       for cons in &c.cons {
-        let (idx, _, _) = cols.get_full(cons.name).unchecked_unwrap();
-        let ci = tp.cols.get_unchecked_mut(idx);
-        match &cons.kind {
-          TableConsKind::Primary => {
+        match cons {
+          ColCons::Primary(pks) => for col in pks {
+            let ci = tp.cols.get_unchecked_mut(cols.get_full(col).unchecked_unwrap().0);
             ci.flags.set(ColFlags::PRIMARY, true);
             ci.flags.set(ColFlags::NOTNULL, true);
             if primary_cnt == 1 { ci.flags.set(ColFlags::UNIQUE, true); }
           }
-          &TableConsKind::Foreign { table, col } => {
-            let (f_tp_id, f_tp) = self.get_tp(table).unchecked_unwrap();
-            let f_ci_id = f_tp.get_ci(col).unchecked_unwrap().idx(&f_tp.cols);
-            ci.foreign_table = f_tp_id;
-            ci.foreign_col = f_ci_id as u8;
+          ColCons::Foreign { col, f_table, f_col } => {
+            let ci = tp.cols.get_unchecked_mut(cols.get_full(col).unchecked_unwrap().0);
+            let (f_tp_id, f_tp) = self.get_tp(f_table).unchecked_unwrap();
+            let f_ci_id = f_tp.get_ci(f_col).unchecked_unwrap().idx(&f_tp.cols);
+            (ci.f_table = f_tp_id, ci.f_col = f_ci_id as u8);
           }
-          TableConsKind::Unique => ci.flags.set(ColFlags::UNIQUE, true),
-          TableConsKind::Check(check) => {
+          ColCons::Unique(col) => {
+            let ci = tp.cols.get_unchecked_mut(cols.get_full(col).unchecked_unwrap().0);
+            ci.flags.set(ColFlags::UNIQUE, true);
+          }
+          ColCons::Check(col, check) => {
+            let ci = tp.cols.get_unchecked_mut(cols.get_full(col).unchecked_unwrap().0);
             let (id, cp) = self.alloc_page::<CheckPage>();
-            ci.check = id;
-            cp.len = check.len() as u32;
+            ci.check = id << 1;
+            cp.count = check.len() as u16;
             let sz = ci.ty.size() as usize;
-            let mut off = 0;
-            for &c in check {
-              debug_assert!(off + sz <= MAX_CHECK_BYTES);
-              fill_ptr(cp.data.as_mut_ptr().add(off), ci.ty, c).unchecked_unwrap();
-              off += sz;
+            for (idx, &c) in check.iter().enumerate() {
+              fill_ptr(cp.data.as_mut_ptr().add(idx * sz), ci.ty, c).unchecked_unwrap();
             }
+          }
+        }
+      }
+      for (idx, col) in c.cols.iter().enumerate() {
+        if let Some(dft) = col.dft {
+          if !dft.is_null() {
+            let ci = tp.cols.get_unchecked_mut(idx);
+            let cp = if ci.check == !0 {
+              let (id, cp) = self.alloc_page::<CheckPage>();
+              ci.check = id << 1;
+              (cp.count = 0, cp).1
+            } else { self.get_page::<CheckPage>(ci.check >> 1) };
+            ci.check |= 1;
+            fill_ptr(cp.data.as_mut_ptr().add(cp.count as usize * ci.ty.size() as usize), ci.ty, dft).unchecked_unwrap();
           }
         }
       }
@@ -159,80 +174,17 @@ impl Db {
       *dp.tables.get_unchecked_mut(dp.table_num as usize) = id;
       dp.table_num += 1;
       tp.cols().iter()
-        .filter(|ci| ci.flags.contains(ColFlags::UNIQUE))
-        .for_each(|ci| self.alloc_index(ci.pr()));
+        .filter(|ci| ci.flags.contains(ColFlags::UNIQUE) || ci.f_table != !0)
+        .for_each(|ci| self.alloc_index(ci.pr(), "").unchecked_unwrap());
       Ok(())
     }
   }
 
-  pub fn drop_table<'a>(&mut self, name: &'a str) -> Result<'a, ()> {
-    unsafe {
-      let dp = self.dp();
-      for (idx, &tp_id) in dp.tables().iter().enumerate() {
-        let tp = self.get_page::<TablePage>(tp_id);
-        if tp.name() == name {
-          if self.has_foreign_link_to(tp_id) { return Err(AlterTableWithForeignLink(name)); }
-          let tables = dp.tables.as_mut_ptr();
-          tables.add(idx).swap(tables.add(dp.table_num as usize - 1));
-          dp.table_num -= 1;
-          tp.cols().iter().filter(|ci| ci.index != !0).for_each(|ci| self.drop_index_impl(ci.pr()));
-          let mut cur = tp.next;
-          loop {
-            // both TablePage and DataPage use [1] as next, [0] as prev
-            let nxt = self.get_page::<(u32, u32)>(cur).1;
-            self.dealloc_page(cur);
-            cur = nxt;
-            if cur == tp_id { break; }
-          }
-          return Ok(());
-        }
-      }
-      Err(NoSuchTable(name))
-    }
-  }
-
-  pub unsafe fn has_foreign_link_to(&mut self, tp_id: u32) -> bool {
-    for &tp_id1 in self.dp().tables() {
-      for ci in self.get_page::<TablePage>(tp_id1).cols() {
-        if ci.foreign_table == tp_id { return true; }
-      }
-    }
-    false
-  }
-}
-
-impl Db {
-  // this is pub for `index` crate's use
-  pub unsafe fn alloc_index(&mut self, ci: &mut ColInfo) {
-    let (id, ip) = self.alloc_page::<IndexPage>();
-    ci.index = id;
-    ip.init(true, ci.ty.size()); // it is the root, but also a leaf
-  }
-
-  pub fn drop_index<'a>(&mut self, table: &'a str, col: &'a str) -> Result<'a, ()> {
-    unsafe {
-      let ci = self.get_tp(table)?.1.get_ci(col)?;
-      if ci.index == !0 { return Err(NoSuchIndex(col)); }
-      if ci.flags.contains(ColFlags::UNIQUE) { return Err(DropIndexOnUnique(col)); }
-      self.drop_index_impl(ci);
-      Ok(())
-    }
-  }
-
-  unsafe fn drop_index_impl(&mut self, ci: &mut ColInfo) {
-    unsafe fn dfs(db: &mut Db, page: u32) {
-      let ip = db.get_page::<IndexPage>(page);
-      let (slot_size, key_size) = (ip.slot_size() as usize, ip.key_size() as usize);
-      macro_rules! at_ch { ($pos: expr) => { *(ip.data.as_mut_ptr().add($pos * slot_size + key_size) as *mut u32) }; }
-      if !ip.leaf {
-        for i in 0..ip.count as usize {
-          dfs(db, at_ch!(i));
-        }
-      }
-      db.dealloc_page(page);
-    }
-    dfs(self, ci.index);
-    ci.index = !0;
+  // return all the (tp_id1, ci_id1, ci_id), where tp_id1.ci_id1 has foreign link to tp_id.ci_id
+  pub unsafe fn foreign_links_to(&mut self, tp_id: u32) -> Vec<(u32, u8, u8)> {
+    self.dp().tables().iter().flat_map(|&tp_id1|
+      self.get_page::<TablePage>(tp_id1).cols().iter().enumerate().filter_map(move |(ci_id1, ci1)|
+        if ci1.f_table == tp_id { Some((tp_id1, ci_id1 as u8, ci1.f_col)) } else { None })).collect()
   }
 }
 
@@ -251,17 +203,16 @@ impl Db {
       dp.first_free = *self.get_page(free); // [0] stores next free(or none)
       free
     } else {
-      self.file.set_len(((self.pages as usize + 1) * PAGE_SIZE) as u64).unwrap_or_else(|e|
-        panic!("Failed to allocate page because {}. The database may already be in an invalid state.", e));
+      self.file.set_len((self.pages as u64 + 1) * PAGE_SIZE as u64).unwrap_or_else(|e| panic!("Failed to allocate page because {}. The database may already be in an invalid state.", e));
       (self.pages, self.pages += 1).0
     };
-    (free, self.get_page(free) as _)
+    (free, self.get_page(free))
   }
 
+  // add `page` to the head of free list
   pub unsafe fn dealloc_page(&mut self, page: u32) {
     let dp = self.dp();
-    let first = self.get_page::<u32>(page);
-    *first = dp.first_free;
+    *self.get_page::<u32>(page) = dp.first_free;
     dp.first_free = page;
   }
 
@@ -278,23 +229,18 @@ impl Db {
     let tp = self.get_page::<TablePage>(tp_id);
     if tp.first_free == !0 {
       let (id, dp) = self.alloc_page::<DataPage>();
-      dp.init(tp.prev, tp_id); // push back
-      self.get_page::<(u32, u32)>(tp.prev).1 = id; // tp.prev.next, note that tp.prev may be a table/data page
-      tp.prev = id;
+      (dp.init(tp.first), tp.first = id); // push front, so insert order may not be kept
       tp.first_free = id;
     }
-    let free_page = tp.first_free;
-    let dp = self.get_page::<DataPage>(free_page);
+    let free = tp.first_free;
+    let dp = self.get_page::<DataPage>(free);
     debug_assert!(dp.count < tp.cap);
-    debug_assert!(tp.cap as usize <= MAX_SLOT_BS * 32);
     let slot = (0..tp.cap as usize).filter_map(|i| {
       if bsget(dp.used.as_ptr(), i) { None } else { (bsset(dp.used.as_mut_ptr(), i), Some(i)).1 }
     }).next().unchecked_unwrap() as u32;
     dp.count += 1;
-    if dp.count == tp.cap { // full, move to next
-      tp.first_free = dp.next_free;
-    }
-    Rid::new(free_page, slot)
+    if dp.count == tp.cap { tp.first_free = dp.next_free; }
+    Rid::new(free, slot)
   }
 
   pub unsafe fn dealloc_data_slot(&mut self, tp: &mut TablePage, rid: Rid) {
@@ -303,16 +249,13 @@ impl Db {
     debug_assert!(bsget(dp.used.as_ptr(), slot as usize));
     bsdel(dp.used.as_mut_ptr(), slot as usize);
     if dp.count == tp.cap { // not in free list, add it
-      dp.next_free = tp.first_free;
-      tp.first_free = page;
+      (dp.next_free = tp.first_free, tp.first_free = page);
     }
-    // it is never given back to db, for simplicity
+    // it is never given back to db, for simplicity (this enables calling `dealloc_data_slot` during iteration)
     dp.count -= 1;
   }
 
   pub unsafe fn get_data_slot(&mut self, tp: &TablePage, rid: Rid) -> *mut u8 {
-    let (page, slot) = (rid.page(), rid.slot());
-    let off = (slot * tp.size as u32) as usize;
-    self.get_page::<DataPage>(page).data.as_mut_ptr().add(off)
+    self.get_page::<DataPage>(rid.page()).data.as_mut_ptr().add((rid.slot() * tp.size as u32) as usize)
   }
 }

@@ -19,7 +19,7 @@ fn index() {
     let (table, col); // init later
     macro_rules! ins {
       () => {
-        e.exec(&Stmt::Insert(Insert { table: "test", vals: ins.iter().map(|x| vec![lit(*x)]).collect() })).unwrap();
+        e.exec(&Stmt::Insert(Insert { table: "test", vals: ins.iter().map(|x| vec![lit(*x)]).collect(), cols: None })).unwrap();
         for (idx, &ins) in ins.iter().enumerate() {
           map.insert((ins, idx as i32));
         }
@@ -36,7 +36,7 @@ fn index() {
     }
     macro_rules! test {
       () => {
-        unsafe { Index::<{Int}>::new(e.db.as_mut().unwrap(), table, col).debug_check_all(); }
+        unsafe { Index::<{Int}>::new(e.db().unwrap(), table, col).debug_check_all(); }
         for &t in &test {
           let index_count = e.select(&Select {
             ops: None,
@@ -53,10 +53,10 @@ fn index() {
     (test.copy_from_slice(&ins), test.shuffle(&mut rng));
     e.exec(&Stmt::CreateDb("test")).unwrap();
     e.exec(&Stmt::UseDb("test")).unwrap();
-    e.exec(&Stmt::CreateTable(CreateTable { name: "test", cols: vec![ColDecl { name: "id", ty: ColTy { size: 0, ty: Int }, notnull: true }], cons: vec![] })).unwrap();
-    e.exec(&Stmt::CreateIndex { table: "test", col: "id" }).unwrap();
+    e.exec(&CreateTable { table: "test", cols: vec![ColDecl { col: "id", ty: ColTy { size: 0, ty: Int }, notnull: true, dft: None }], cons: vec![] }.into()).unwrap();
+    e.exec(&CreateIndex { index: "test_id_index", table: "test", col: "id" }.into()).unwrap();
     unsafe { // modify IndexPage's cap to generate more splits
-      let db = e.db.as_mut().unwrap();
+      let db = e.db().unwrap();
       let (tp_id, tp) = db.get_tp("test").unwrap();
       let ci = tp.get_ci("id").unwrap();
       table = tp_id;

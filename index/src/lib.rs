@@ -11,18 +11,16 @@ use crate::cmp::*;
 
 pub mod cmp;
 pub mod iter;
-pub mod create;
+pub mod alter;
 
-pub use create::create;
+pub use alter::*;
 
-// using both lifetime parameter and const parameter will cause my rustc(1.38.0-nightly) to ICE
-// so just use pointer here
+// using both lifetime parameter and const parameter will cause my rustc (1.40.0-nightly) to ICE, so just use pointer here
 pub struct Index<const T: BareTy> {
-  db: NonNull<Db>,
+  db: *mut Db,
   root: u32,
   table: u32,
   col: u32,
-  rid_off: u16,
   _p: PhantomData<Cmp<{ T }>>,
 }
 
@@ -30,11 +28,11 @@ impl<const T: BareTy> Index<{ T }> {
   pub unsafe fn new(db: &mut Db, table: u32, col: u32) -> Index<{ T }> {
     let tp = db.get_page::<TablePage>(table);
     let root = tp.cols.get_unchecked_mut(col as usize).index;
-    let rid_off = db.get_page::<IndexPage>(root).rid_off;
-    Index { db: NonNull::new_unchecked(db), root, table, col, rid_off, _p: PhantomData }
+    Index { db, root, table, col, _p: PhantomData }
   }
 
-  unsafe fn db<'a>(&mut self) -> &'a mut Db { self.db.as_ptr().r() }
+  unsafe fn db<'a>(&mut self) -> &'a mut Db { self.db.r() }
+  unsafe fn rid_off(&self) -> usize { self.db.r().get_page::<IndexPage>(self.root).rid_off as usize }
 
   // caller guarantee data_rid doesn't exist in tree
   pub unsafe fn insert(&mut self, data: *const u8, rid: Rid) {
@@ -113,7 +111,7 @@ impl<const T: BareTy> Index<{ T }> {
     }
     if ip.leaf {
       let pos = upper_bound::<{ T }>(ip, x) - 1;
-      debug_assert_eq!(Cmp::<{ T }>::cmp_full(x, at!(pos), self.rid_off as usize), Ordering::Equal);
+      debug_assert_eq!(Cmp::<{ T }>::cmp_full(x, at!(pos), self.rid_off()), Ordering::Equal);
       remove!(pos);
     } else {
       let pos = upper_bound::<{ T }>(ip, x).max(1) - 1;
@@ -166,9 +164,9 @@ impl<const T: BareTy> Index<{ T }> {
   }
 
   unsafe fn make_data_rid(&self, data: *const u8, rid: Rid) -> Align4U8 {
-    let data_rid = Align4U8::new(self.rid_off as usize + 4);
-    data_rid.ptr.copy_from_nonoverlapping(data, self.rid_off as usize);
-    *(data_rid.ptr.add(self.rid_off as usize) as *mut Rid) = rid;
+    let data_rid = Align4U8::new(self.rid_off() + 4);
+    data_rid.ptr.copy_from_nonoverlapping(data, self.rid_off());
+    *(data_rid.ptr.add(self.rid_off()) as *mut Rid) = rid;
     data_rid
   }
 
@@ -182,9 +180,9 @@ impl<const T: BareTy> Index<{ T }> {
       // assert_eq!(ip.cap, MAX_INDEX_BYTES as u16 / ip.slot_size());
       assert!(ip.count < ip.cap); // cannot have count == cap, the code depends on it
       assert!(page == self.root || ip.cap / 2 <= ip.count);
-      assert_eq!(ip.rid_off, self.rid_off);
+      assert_eq!(ip.rid_off as usize, self.rid_off());
       for i in 1..ip.count as usize {
-        assert_eq!(Cmp::<{ T }>::cmp_full(at!(i - 1), at!(i), self.rid_off as usize), Ordering::Less);
+        assert_eq!(Cmp::<{ T }>::cmp_full(at!(i - 1), at!(i), self.rid_off()), Ordering::Less);
       }
     }
   }
@@ -205,10 +203,10 @@ impl<const T: BareTy> Index<{ T }> {
     macro_rules! at_ch { ($pos: expr) => { *(ip.data.as_mut_ptr().add($pos * slot_size + key_size) as *mut u32) }; }
     if !lb.is_null() {
       // the min key must be the dup key
-      assert_eq!(Cmp::<{ T }>::cmp_full(lb, at!(0), self.rid_off as usize), Ordering::Equal);
+      assert_eq!(Cmp::<{ T }>::cmp_full(lb, at!(0), self.rid_off()), Ordering::Equal);
     }
     if !ub.is_null() {
-      assert_eq!(Cmp::<{ T }>::cmp_full(at!(ip.count as usize - 1), ub, self.rid_off as usize), Ordering::Less);
+      assert_eq!(Cmp::<{ T }>::cmp_full(at!(ip.count as usize - 1), ub, self.rid_off()), Ordering::Less);
     }
     if !ip.leaf {
       for i in 0..ip.count as usize {

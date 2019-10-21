@@ -1,3 +1,5 @@
+use std::{io, result, fmt};
+
 use crate::{MAGIC_LEN, ColTy, BareTy, LitTy, CLit, AggOp, BinOp, CmpOp};
 
 #[derive(Debug)]
@@ -27,40 +29,40 @@ pub enum Error<'a> {
   ColSizeTooBig(usize),
   TableNameTooLong(&'a str),
   ColNameTooLong(&'a str),
+  IndexNameTooLong(&'a str),
   DupTable(&'a str),
   DupCol(&'a str),
-  ForeignKeyOnNonUnique(&'a str),
   DupIndex(&'a str),
-  DropIndexOnUnique(&'a str),
+  // add duplicate constraint on one col in create/alter table
+  DupConstraint(&'a str),
   NoSuchTable(&'a str),
   NoSuchCol(&'a str),
   NoSuchIndex(&'a str),
-  // this includes delete from/drop a table that have a col with a foreign link
-  // and update a col with a foreign link (strictly speaking, in this case its name should be "AlterCol")
-  AlterTableWithForeignLink(&'a str),
+  NoSuchForeign,
+  ForeignOnNotUnique(&'a str),
+  // this includes delete/drop table/update that actually affects a col with a foreign link
+  ModifyColWithForeignLink { col: &'a str, val: CLit<'a> },
   InvalidDate { date: &'a str, reason: chrono::ParseError },
   InvalidLike { like: &'a str, reason: Box<regex::Error> },
   InvalidLikeTy(BareTy),
   InvalidLikeTy1(LitTy),
+  // require them to be exactly the same (including BareTy and size, in order to search each other in index page)
   IncompatibleForeignTy { foreign: ColTy, own: ColTy },
   RecordTyMismatch { expect: BareTy, actual: BareTy },
   RecordLitTyMismatch { expect: BareTy, actual: LitTy },
-  InsertLenMismatch { expect: u8, actual: usize },
+  // e.g.: insert (1, 2) into (int)
+  InsertTooLong { max: usize, actual: usize },
   // Put stands for Insert or Update
   PutStrTooLong { limit: u8, actual: usize },
   PutNullOnNotNull,
-  PutDupOnUniqueKey { col: &'a str, val: CLit<'a> },
-  PutNonexistentForeignKey { col: &'a str, val: CLit<'a> },
+  PutDupOnUnique { col: &'a str, val: CLit<'a> },
+  PutNonexistentForeign { col: &'a str, val: CLit<'a> },
   PutNotInCheck { col: &'a str, val: CLit<'a> },
-  PutDupCompositePrimaryKey,
+  PutDupCompositePrimary,
   AmbiguousCol(&'a str),
-  // below 4 are duplicate constraint on one col in creating
-  DupPrimary(&'a str),
-  DupForeign(&'a str),
-  DupUnique(&'a str),
-  DupCheck(&'a str),
+  // check list always rejects null (because it is meaningless)
   CheckNull(&'a str),
-  CheckTooLong(&'a str, usize),
+  CheckTooLong(&'a str),
   InvalidAgg { col: ColTy, op: AggOp },
   // select agg col together with non-agg col
   MixedSelect,
@@ -69,11 +71,23 @@ pub enum Error<'a> {
   IncompatibleBin { op: BinOp, ty: LitTy },
   IncompatibleCmp { op: CmpOp, l: LitTy, r: LitTy },
   IncompatibleLogic(LitTy),
-  IO(std::io::Error),
+  IO(io::Error),
 }
 
-pub type Result<'a, T> = std::result::Result<T, Error<'a>>;
+// after modifying `self.0` columns, a `self.1` error occurs
+pub struct ModifyError<'a>(pub u32, pub Error<'a>);
 
-impl From<std::io::Error> for Error<'_> {
-  fn from(e: std::io::Error) -> Self { Error::IO(e) }
+pub type Result<'a, T> = result::Result<T, Error<'a>>;
+pub type ModifyResult<'a, T> = result::Result<T, ModifyError<'a>>;
+
+impl From<io::Error> for Error<'_> { fn from(e: io::Error) -> Self { Error::IO(e) } }
+
+impl From<io::Error> for ModifyError<'_> { fn from(e: io::Error) -> Self { Self(0, e.into()) } }
+
+impl<'a> From<Error<'a>> for ModifyError<'a> { fn from(e: Error<'a>) -> Self { Self(0, e) } }
+
+impl fmt::Debug for ModifyError<'_> {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    write!(f, "{:?}; {} column(s) affected", self.1, self.0)
+  }
 }

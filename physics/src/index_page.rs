@@ -1,3 +1,5 @@
+use std::mem::size_of;
+
 pub struct IndexPage {
   // !0 for invalid
   pub next: u32,
@@ -30,4 +32,4 @@ impl IndexPage {
 }
 
 #[cfg_attr(tarpaulin, skip)]
-fn _ck() { const_assert_eq!(std::mem::size_of::<IndexPage>(), common::PAGE_SIZE); }
+fn _ck() { const_assert_eq!(size_of::<IndexPage>(), common::PAGE_SIZE); }

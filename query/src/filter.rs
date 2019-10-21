@@ -8,8 +8,9 @@ use db::{Db, fill_ptr};
 use index::{Index, handle_all};
 
 // return true for successfully filtered with index
-unsafe fn try_filter_with_index<'a>(db: &mut Db, where_: &[impl Borrow<Cond<'a>>], tp_id: u32, tp: &TablePage,
+unsafe fn try_filter_with_index<'a>(db: &mut Db, where_: &[impl Borrow<Cond<'a>>], tp_id: u32,
                                     pred: &impl Fn(*const u8) -> bool, f: &mut impl FnMut(*mut u8, Rid) -> Result<'a, ()>) -> Result<'a, bool> {
+  let tp = db.get_page::<TablePage>(tp_id);
   for cond in where_ {
     if let &Cond::Cmp(op, l, Atom::Lit(r)) = cond.borrow() {
       match r.lit() {
@@ -64,11 +65,12 @@ unsafe fn try_filter_with_index<'a>(db: &mut Db, where_: &[impl Borrow<Cond<'a>>
 // guarantee the `*mut u8` passed to f only comes from DataPage, not from IndexPage
 // if you want to modify index while iterating, you CANNOT modify while iterating, remember to set `use_index` = false
 // if you want to delete the current data slot from data page while iterating, you CAN delete while iterating (due to the implementation)
-pub(crate) unsafe fn filter<'a>(db: &mut Db, where_: &[impl Borrow<Cond<'a>>], tp_id: u32, tp: &TablePage,
+pub(crate) unsafe fn filter<'a>(db: &mut Db, where_: &[impl Borrow<Cond<'a>>], tp_id: u32,
                                 pred: impl Fn(*const u8) -> bool, mut f: impl FnMut(*mut u8, Rid) -> Result<'a, ()>,
                                 use_index: bool) -> Result<'a, ()> {
-  if !use_index || !try_filter_with_index(db, where_, tp_id, tp, &pred, &mut f)? {
-    for (data, rid) in db.record_iter(tp_id, tp) {
+  if !use_index || !try_filter_with_index(db, where_, tp_id, &pred, &mut f)? {
+    let tp = db.get_page::<TablePage>(tp_id);
+    for (data, rid) in db.record_iter(tp) {
       if pred(data.as_ptr()) { f(data.as_ptr(), rid)?; }
     }
   }

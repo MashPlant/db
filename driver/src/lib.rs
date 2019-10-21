@@ -7,12 +7,10 @@ use db::{Db, show::show_db};
 use query::SelectResult;
 
 #[derive(Default)]
-pub struct Eval {
-  pub db: Option<Db>
-}
+pub struct Eval(Option<Db>);
 
 impl Eval {
-  pub fn exec_all<'a>(&mut self, code: &'a str, alloc: &'a Arena<u8>, input_handler: impl Fn(&Stmt), result_handler: impl Fn(&str)) -> Result<'a, ()> {
+  pub fn exec_all<'a>(&mut self, code: &'a str, alloc: &'a Arena<u8>, input_handler: impl Fn(&Stmt), result_handler: impl Fn(&str)) -> ModifyResult<'a, ()> {
     for s in &syntax::work(code, alloc)? {
       input_handler(s);
       result_handler(&self.exec(s)?);
@@ -20,17 +18,18 @@ impl Eval {
     Ok(())
   }
 
-  pub fn exec<'a>(&mut self, sql: &Stmt<'a>) -> Result<'a, Cow<str>> {
+  pub fn exec<'a>(&mut self, sql: &Stmt<'a>) -> ModifyResult<'a, Cow<str>> {
+    fn fmt<'a>(n: u32) -> Cow<'a, str> { Cow::Owned(format!("{} column(s) affected", n)) }
     use Stmt::*;
     Ok(match sql {
-      Insert(i) => (query::insert(i, self.db()?)?, "".into()).1,
-      Delete(d) => query::delete(d, self.db()?)?.into(),
+      Insert(i) => fmt(query::insert(i, self.db()?)?),
+      Delete(d) => fmt(query::delete(d, self.db()?)?),
       Select(s) => query::select(s, self.db()?)?.csv().into(),
-      Update(u) => query::update(u, self.db()?)?.into(),
+      Update(u) => fmt(query::update(u, self.db()?)?),
       &CreateDb(path) => (Db::create(path), "".into()).1,
       &DropDb(path) => {
-        if Some(path) == self.db.as_ref().map(|db| db.path()) { self.db = None; }
-        (std::fs::remove_file(path)?, "".into()).1
+        if Some(path) == self.0.as_ref().map(|db| db.path()) { self.0 = None; }
+        (fs::remove_file(path)?, "".into()).1
       }
       &ShowDb(path) => {
         let mut s = String::new();
@@ -44,19 +43,22 @@ impl Eval {
         }
         s.into()
       }
-      &UseDb(name) => (self.db = Some(Db::open(name)?), "".into()).1,
+      &UseDb(path) => (self.0 = Some(Db::open(path)?), "".into()).1,
       CreateTable(c) => (self.db()?.create_table(c)?, "".into()).1,
-      &DropTable(name) => (self.db()?.drop_table(name)?, "".into()).1,
-      &ShowTable(name) => self.db()?.show_table(name)?.into(),
+      &DropTable(table) => (index::drop_table(self.db()?, table)?, "".into()).1,
+      &ShowTable(table) => self.db()?.show_table(table)?.into(),
       ShowTables => self.db()?.show_tables().into(),
-      &CreateIndex { table, col } => (index::create(self.db()?, table, col)?, "".into()).1,
-      &DropIndex { table, col } => (self.db()?.drop_index(table, col)?, "".into()).1
+      CreateIndex(c) => (index::create_index(self.db()?, c)?, "".into()).1,
+      DropIndex(d) => (self.db()?.drop_index(d)?, "".into()).1,
+      &Rename { old, new } => (self.db()?.rename_table(old, new)?, "".into()).1,
+      AddForeign(a) => (index::add_foreign(self.db()?, a)?, "".into()).1,
+      DropForeign { table, col } => (self.db()?.drop_foreign(table, col)?, "".into()).1
     })
   }
 
   pub fn select<'a, 'b>(&'b self, s: &Select<'a>) -> Result<'a, SelectResult<'b>> {
-    query::select(s, self.db.as_ref().ok_or(NoDbInUse)?)
+    query::select(s, self.0.as_ref().ok_or(NoDbInUse)?)
   }
 
-  fn db<'a>(&mut self) -> Result<'a, &mut Db> { self.db.as_mut().ok_or(NoDbInUse) }
+  pub fn db<'a>(&mut self) -> Result<'a, &mut Db> { self.0.as_mut().ok_or(NoDbInUse) }
 }

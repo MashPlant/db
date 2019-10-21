@@ -1,3 +1,5 @@
+use std::{mem::size_of, slice};
+
 use common::*;
 
 #[repr(C)]
@@ -23,10 +25,9 @@ impl DbPage {
   }
 
   pub unsafe fn tables<'a>(&self) -> &'a [u32] {
-    debug_assert!(self.table_num < MAX_TABLE as u16);
-    std::slice::from_raw_parts(self.tables.as_ptr(), self.table_num as usize)
+    slice::from_raw_parts(self.tables.as_ptr(), self.table_num as usize)
   }
 }
 
 #[cfg_attr(tarpaulin, skip)]
-fn _ck() { const_assert_eq!(std::mem::size_of::<DbPage>(), common::PAGE_SIZE); }
+fn _ck() { const_assert_eq!(size_of::<DbPage>(), common::PAGE_SIZE); }

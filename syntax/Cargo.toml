@@ -8,3 +8,5 @@ edition = "2018"
 common = { path = "../common" }
 parser-macros = { git = "https://github.com/MashPlant/lalr1" }
 typed-arena = "1.6.1"
+either = "1.5"
+derive_more = "0.15.0"

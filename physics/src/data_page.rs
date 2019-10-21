@@ -1,6 +1,8 @@
+use std::mem::size_of;
+
 #[repr(C)]
 pub struct DataPage {
-  pub prev: u32,
+  // !0 for none
   pub next: u32,
   // !0 for none
   pub next_free: u32,
@@ -11,19 +13,19 @@ pub struct DataPage {
 }
 
 impl DataPage {
-  pub fn init(&mut self, prev: u32, next: u32) {
-    self.prev = prev;
+  pub unsafe fn init(&mut self, next: u32) {
     self.next = next;
     self.next_free = !0;
     self.count = 0;
-    unsafe { self.used.as_mut_ptr().write_bytes(0, common::MAX_SLOT_BS); }
+    self.used.as_mut_ptr().write_bytes(0, common::MAX_SLOT_BS);
   }
 }
 
-// for simplicity, a check list is one page
+// for simplicity, one check list always use one page, if size exceeds the limit, just reject it
 #[repr(C)]
 pub struct CheckPage {
-  pub len: u32,
+  pub count: u16,
+  pub _rsv: [u8; 2],
   pub data: [u8; MAX_CHECK_BYTES],
 }
 
@@ -31,6 +33,6 @@ pub const MAX_CHECK_BYTES: usize = 8188;
 
 #[cfg_attr(tarpaulin, skip)]
 fn _ck() {
-  const_assert_eq!(std::mem::size_of::<DataPage>(), common::PAGE_SIZE);
-  const_assert_eq!(std::mem::size_of::<CheckPage>(), common::PAGE_SIZE);
+  const_assert_eq!(size_of::<DataPage>(), common::PAGE_SIZE);
+  const_assert_eq!(size_of::<CheckPage>(), common::PAGE_SIZE);
 }

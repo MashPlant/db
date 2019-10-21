@@ -13,11 +13,10 @@ pub const MAGIC_LEN: usize = 18;
 pub const MAGIC: &[u8; MAGIC_LEN] = b"MashPlant-DataBase";
 pub const LOG_MAX_SLOT: usize = 9;
 pub const MAX_PAGE: usize = 1 << (32 - LOG_MAX_SLOT);
-// actually can hold up to MAX_DATA_BYTE / MIN_SLOT_SIZE = 507
-pub const MAX_SLOT: usize = 1 << LOG_MAX_SLOT;
-pub const MAX_SLOT_BS: usize = MAX_SLOT / 32;
-pub const MIN_SLOT_SIZE: usize = PAGE_SIZE / MAX_SLOT;
-pub const MAX_DATA_BYTE: usize = PAGE_SIZE - (4 + MAX_SLOT_BS) * 4 /* = 8112 */;
+pub const MAX_SLOT: usize = 1 << LOG_MAX_SLOT; // 512 (actually can hold up to MAX_DATA_BYTE / MIN_SLOT_SIZE = 507)
+pub const MAX_SLOT_BS: usize = MAX_SLOT / 32; // 16
+pub const MIN_SLOT_SIZE: usize = PAGE_SIZE / MAX_SLOT; // 16
+pub const MAX_DATA_BYTE: usize = PAGE_SIZE - 12 - MAX_SLOT_BS * 4; // 8116 (12 is the size of all other fields in DataPage)
 pub const PAGE_SIZE: usize = 8192;
 
 pub type IndexMap<K, V> = indexmap::IndexMap<K, V, hashbrown::hash_map::DefaultHashBuilder>;

@@ -1,6 +1,7 @@
 use common::*;
 use std::fmt;
 
+#[derive(derive_more::From)]
 pub enum Stmt<'a> {
   Insert(Insert<'a>),
   Delete(Delete<'a>),
@@ -15,13 +16,17 @@ pub enum Stmt<'a> {
   DropTable(&'a str),
   ShowTable(&'a str),
   ShowTables,
-  CreateIndex { table: &'a str, col: &'a str },
-  DropIndex { table: &'a str, col: &'a str },
+  CreateIndex(CreateIndex<'a>),
+  DropIndex(DropIndex<'a>),
+  Rename { old: &'a str, new: &'a str },
+  AddForeign(AddForeign<'a>),
+  DropForeign { table: &'a str, col: &'a str },
 }
 
 #[derive(Debug)]
 pub struct Insert<'a> {
   pub table: &'a str,
+  pub cols: Option<Vec<&'a str>>,
   pub vals: Vec<Vec<CLit<'a>>>,
 }
 
@@ -60,31 +65,49 @@ pub struct Agg<'a> {
 
 #[derive(Debug)]
 pub struct CreateTable<'a> {
-  pub name: &'a str,
+  pub table: &'a str,
   pub cols: Vec<ColDecl<'a>>,
-  pub cons: Vec<TableCons<'a>>,
+  pub cons: Vec<ColCons<'a>>,
+}
+
+#[derive(Debug)]
+pub struct CreateIndex<'a> {
+  pub index: &'a str,
+  pub table: &'a str,
+  pub col: &'a str,
+}
+
+#[derive(Debug)]
+pub struct DropIndex<'a> {
+  pub index: &'a str,
+  // `table` is only for check, doesn't provide any information
+  // "drop index" => table is None; "alter table drop index" => table is Some
+  pub table: Option<&'a str>,
+}
+
+#[derive(Debug)]
+pub struct AddForeign<'a> {
+  pub table: &'a str,
+  pub col: &'a str,
+  pub f_table: &'a str,
+  pub f_col: &'a str,
 }
 
 #[derive(Debug)]
 pub struct ColDecl<'a> {
-  pub name: &'a str,
+  pub col: &'a str,
   pub ty: ColTy,
   pub notnull: bool,
+  pub dft: Option<CLit<'a>>,
 }
 
 // Cons for Constraint
 #[derive(Debug)]
-pub struct TableCons<'a> {
-  pub name: &'a str,
-  pub kind: TableConsKind<'a>,
-}
-
-#[derive(Debug)]
-pub enum TableConsKind<'a> {
-  Primary,
-  Foreign { table: &'a str, col: &'a str },
-  Unique,
-  Check(Vec<CLit<'a>>),
+pub enum ColCons<'a> {
+  Primary(Vec<&'a str>),
+  Foreign { col: &'a str, f_table: &'a str, f_col: &'a str },
+  Unique(&'a str),
+  Check(&'a str, Vec<CLit<'a>>),
 }
 
 #[derive(Copy, Clone)]
@@ -101,7 +124,6 @@ pub enum Expr<'a> {
   Atom(Atom<'a>),
   Null(Box<Expr<'a>>, bool),
   Like(Box<Expr<'a>>, &'a str),
-  Neg(Box<Expr<'a>>),
   And(Box<(Expr<'a>, Expr<'a>)>),
   Or(Box<(Expr<'a>, Expr<'a>)>),
   Cmp(CmpOp, Box<(Expr<'a>, Expr<'a>)>),
@@ -128,10 +150,9 @@ impl fmt::Debug for Stmt<'_> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     use Stmt::*;
     match self {
-      Insert(x) => write!(f, "{:?}", x), Delete(x) => write!(f, "{:?}", x), Select(x) => write!(f, "{:?}", x), Update(x) => write!(f, "{:?}", x), CreateTable(x) => write!(f, "{:?}", x),
-      CreateDb(x) => write!(f, "CreateDb({:?})", x), DropDb(x) => write!(f, "DropDb({:?})", x), ShowDb(x) => write!(f, "ShowDb({:?})", x), UseDb(x) => write!(f, "UseDb({:?})", x), DropTable(x) => write!(f, "DropTable({:?})", x), ShowTable(x) => write!(f, "ShowTable({:?})", x),
-      ShowDbs => write!(f, "ShowDbs"), ShowTables => write!(f, "ShowTables"),
-      CreateIndex { table, col } => write!(f, "CreateIndex({}.{})", table, col), DropIndex { table, col } => write!(f, "DropIndex({}.{})", table, col)
+      Insert(x) => write!(f, "{:?}", x), Delete(x) => write!(f, "{:?}", x), Select(x) => write!(f, "{:?}", x), Update(x) => write!(f, "{:?}", x), CreateTable(x) => write!(f, "{:?}", x), CreateIndex(x) => write!(f, "{:?}", x), DropIndex(x) => write!(f, "{:?}", x), AddForeign(x) => write!(f, "{:?}", x),
+      CreateDb(x) => write!(f, "CreateDb({:?})", x), DropDb(x) => write!(f, "DropDb({:?})", x), ShowDb(x) => write!(f, "ShowDb({:?})", x), UseDb(x) => write!(f, "UseDb({:?})", x), DropTable(x) => write!(f, "DropTable({:?})", x), ShowTable(x) => write!(f, "ShowTable({:?})", x), ShowDbs => write!(f, "ShowDbs"), ShowTables => write!(f, "ShowTables"),
+      Rename { old, new } => write!(f, "Rename({:?} => {:?})", old, new), DropForeign { table, col } => write!(f, "DropForeign({}.{})", table, col)
     }
   }
 }
@@ -170,7 +191,6 @@ impl fmt::Debug for Expr<'_> {
       Expr::Atom(x) => write!(f, "{:?}", x),
       Expr::Null(x, null) => write!(f, "({:?}) is {}null", x, if *null { "" } else { "not " }),
       Expr::Like(x, like) => write!(f, "({:?}) like '{}'", x, like),
-      Expr::Neg(x) => write!(f, "-({:?})", x),
       Expr::And(box (l, r)) => write!(f, "({:?}) and ({:?})", l, r), Expr::Or(box (l, r)) => write!(f, "({:?}) or ({:?})", l, r),
       Expr::Cmp(op, box (l, r)) => write!(f, "({:?}) {} ({:?})", l, op.name(), r), Expr::Bin(op, box (l, r)) => write!(f, "({:?}) {} ({:?})", l, op.name(), r),
     }

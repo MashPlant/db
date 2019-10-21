@@ -4,7 +4,7 @@ use std::{fmt::Write, mem};
 use common::{*, BareTy::*, Error::*, AggOp::*, CmpOp::*};
 use syntax::ast::*;
 use physics::*;
-use db::{Db, ptr2lit};
+use db::{Db, data2lit};
 use crate::{predicate::{and, one_predicate, cross_predicate}, filter::filter, is_null};
 use chrono::NaiveDate;
 use ordslice::Ext;
@@ -27,7 +27,6 @@ impl SelectResult<'_> {
   // `data` is 2-d array of dimension = tbls.len() * (data.len() / tbls.len())
   // tbls[i] <-> data[i], both belongs to a table
   unsafe fn new<'a>(tbls: &[Vec<Col<'a>>], data: &[*const u8]) -> SelectResult<'a> {
-    debug_assert_eq!(data.len() % tbls.len(), 0);
     let result_num = data.len() / tbls.len();
     // if has agg, all col should have agg (checked in mk_tbls)
     let has_agg = tbls.iter().flatten().any(|col| col.op.is_some());
@@ -48,9 +47,7 @@ impl SelectResult<'_> {
                   let ci = col.ci.unchecked_unwrap();
                   let ptr = data.add(ci.off as usize);
                   match ci.ty.ty {
-                    Int => sum += *(ptr as *const i32) as f64,
-                    Float => sum += *(ptr as *const f32) as f64,
-                    _ => debug_unreachable!(),
+                    Int => sum += *(ptr as *const i32) as f64, Float => sum += *(ptr as *const f32) as f64, _ => debug_unreachable!(),
                   }
                   notnull_cnt += 1;
                 }
@@ -61,7 +58,7 @@ impl SelectResult<'_> {
             }
             Min | Max => {
               let it = (0..result_num).filter_map(|i| {
-                let lit = ptr2lit(*data.get_unchecked(i * tbls.len() + idx), col.ci_id, col.ci.unchecked_unwrap());
+                let lit = data2lit(*data.get_unchecked(i * tbls.len() + idx), col.ci_id, col.ci.unchecked_unwrap());
                 if lit.is_null() { None } else { Some(lit) }
               });
               // can't use function reference directly because `cmp` is unsafe
@@ -84,7 +81,7 @@ impl SelectResult<'_> {
         for (idx, tbl) in tbls.iter().enumerate() {
           let data = *data.get_unchecked(i * tbls.len() + idx);
           for col in tbl {
-            ret.as_mut_ptr().add(i * row + j).write(ptr2lit(data, col.ci_id, col.ci.unchecked_unwrap()));
+            ret.as_mut_ptr().add(i * row + j).write(data2lit(data, col.ci_id, col.ci.unchecked_unwrap()));
             j += 1;
           }
         }
@@ -95,32 +92,22 @@ impl SelectResult<'_> {
   }
 
   pub fn row_count(&self) -> usize {
-    debug_assert_eq!(self.data.len() % self.cols.len(), 0);
-    self.data.len() / self.cols.len()
+    self.data.len().checked_div(self.cols.len()).unwrap_or(0)
   }
 
   pub fn csv(&self) -> String {
     unsafe {
       let mut csv = String::new();
-      let mut first = true;
       for &Col { op, ci, .. } in &self.cols {
-        if !first { csv.push(','); }
-        first = false;
         if let Some(ci) = ci {
-          let name = ci.name();
-          if let Some(op) = op { write!(csv, "{}({})", op.name(), name).unchecked_unwrap(); } else { csv += name; }
-        } else {
-          debug_assert!(op == Some(CountAll));
-          csv += "count(*)";
-        }
+          if let Some(op) = op { write!(csv, "{}({})", op.name(), ci.name()).unchecked_unwrap(); } else { csv += ci.name(); }
+        } else { csv += "count(*)"; }
+        csv.push(',');
       }
-      csv.push('\n');
+      (csv.pop(), csv.push('\n'));
       for i in 0..self.row_count() {
         let row = self.data.get_unchecked(i * self.cols.len()..(i + 1) * self.cols.len());
-        let mut first = true;
         for lit in row {
-          if !first { csv.push(','); }
-          first = false;
           match lit.lit() { // some tiny modifications to Lit's `debug` method
             Lit::Null => {}
             Lit::Str(s) => {
@@ -134,11 +121,11 @@ impl SelectResult<'_> {
             }
             _ => write!(csv, "{:?}", lit).unchecked_unwrap(),
           }
+          csv.push(',');
         }
-        csv.push('\n');
+        (csv.pop(), csv.push('\n'));
       }
-      csv.pop(); // remove the extra newline
-      csv
+      (csv.pop(), csv).1
     }
   }
 }
@@ -151,12 +138,12 @@ struct SelectCtx<'a, 'b> {
 impl<'a, 'b> SelectCtx<'a, 'b> {
   unsafe fn one_where(&self, cr: &ColRef<'a>) -> Result<'a, (&'b TablePage, &'b ColInfo, usize)> {
     if let Some(t) = cr.table {
-      if let Some((tbidx_l, _, &tp)) = self.tbls.get_full(t) {
-        Ok((tp.1.pr(), tp.1.pr().get_ci(cr.col)?, tbidx_l))
+      if let Some((tbl_idx_l, _, &tp)) = self.tbls.get_full(t) {
+        Ok((tp.1.pr(), tp.1.pr().get_ci(cr.col)?, tbl_idx_l))
       } else { Err(NoSuchTable(t)) }
     } else {
       match self.cols.get(cr.col) {
-        Some(&Some((tp, ci, tbidx_l))) => Ok((tp.pr(), ci.pr(), tbidx_l)),
+        Some(&Some((tp, ci, tbl_idx_l))) => Ok((tp.pr(), ci.pr(), tbl_idx_l)),
         Some(None) => Err(AmbiguousCol(cr.col)),
         None => Err(NoSuchCol(cr.col)),
       }
@@ -173,11 +160,9 @@ impl<'a, 'b> SelectCtx<'a, 'b> {
       for &Agg { op, col } in ops {
         if op == Some(CountAll) {
           // I admit it is quite ugly...
-          debug_assert!(0 < ret.len());
           ret.get_unchecked_mut(0).push(Col { op, ci_id: !0, ci: None });
         } else {
           let (tp, ci, idx) = self.one_where(&col)?;
-          debug_assert!(idx < ret.len());
           let ty = ci.ty.ty;
           if let Some(op) = op {
             if (op == Avg || op == Sum) && ty != Int && ty != Float { return Err(InvalidAgg { col: ci.ty, op }); }
@@ -198,7 +183,7 @@ pub fn select<'a, 'b>(s: &Select<'a>, db: &'b Db) -> Result<'a, SelectResult<'b>
   unsafe {
     let db = db.pr();
     let tbl_num = s.tables.len();
-    debug_assert!(tbl_num >= 1); // parser guarantee this
+    if tbl_num == 0 { return Ok(SelectResult { cols: vec![], data: vec![] }); }
     macro_rules! at { ($arr: expr, $x: expr, $y: expr) => { $arr.get_unchecked_mut($x * tbl_num + $y) }; }
     let mut tbls = IndexMap::default();
     let mut cols = HashMap::new();
@@ -210,9 +195,7 @@ pub fn select<'a, 'b>(s: &Select<'a>, db: &'b Db) -> Result<'a, SelectResult<'b>
         cols.entry(ci.name()).and_modify(|x| *x = None).or_insert(Some((&*tp.p(), ci, idx)));
       }
     }
-    debug_assert_eq!(tbls.len(), tbl_num);
     let ctx = SelectCtx { tbls, cols };
-    let result_tbls = ctx.mk_tbls(&s.ops)?;
 
     let mut one_preds = Vec::with_capacity(tbl_num);
     // `cross_preds` is 2-d array, dim = tbl_num * tbl_num
@@ -227,7 +210,6 @@ pub fn select<'a, 'b>(s: &Select<'a>, db: &'b Db) -> Result<'a, SelectResult<'b>
     for cond in &s.where_ {
       let (l, r) = (cond.lhs_col(), cond.rhs_col_op());
       let (mut tp_l, mut ci_l, mut idx_l) = ctx.one_where(l)?;
-      debug_assert!(idx_l < tbl_num);
       if let Some(((mut tp_r, mut ci_r, mut idx_r), mut op)) = {
         if let Some((r, op)) = r {
           Some((ctx.one_where(r)?, op)).filter(|((_, _, idx_r), _)| *idx_r != idx_l)
@@ -239,7 +221,6 @@ pub fn select<'a, 'b>(s: &Select<'a>, db: &'b Db) -> Result<'a, SelectResult<'b>
           mem::swap(&mut ci_l, &mut ci_r);
           mem::swap(&mut idx_l, &mut idx_r);
         }
-        debug_assert!(idx_l > idx_r);
         at!(cross_preds, idx_l, idx_r).push(cross_predicate(op, (ci_l, ci_r), (tp_l, tp_r))?);
         if op != Ne && ci_l.ty.ty == ci_r.ty.ty {
           at!(cross_cols, idx_l, idx_r).get_or_insert((op, ci_l, ci_r)); // store the first expr
@@ -256,7 +237,7 @@ pub fn select<'a, 'b>(s: &Select<'a>, db: &'b Db) -> Result<'a, SelectResult<'b>
       let (_, &(tp_id, tp)) = ctx.tbls.get_index(idx).unchecked_unwrap();
       let where_ = one_wheres.get_unchecked(idx);
       let one_result = one_results.get_unchecked_mut(idx);
-      filter(db, where_, tp_id, tp, and(pred), |x, _| {
+      filter(db, where_, tp_id, and(pred), |x, _| {
         // remove some null data, it can optimize a little, but mainly for making later handling easier
         // if it participate in any comparison, then reject null results, so later the sort + binary search can avoid handling null
         if (0..idx).all(|idx1| at!(cross_cols, idx, idx1).map(|(_, ci, _)| !is_null(x, ci.idx(&tp.cols))).unwrap_or(true)) &&
@@ -323,6 +304,6 @@ pub fn select<'a, 'b>(s: &Select<'a>, db: &'b Db) -> Result<'a, SelectResult<'b>
       }
       final_ = new_final_;
     }
-    Ok(SelectResult::new(&result_tbls, &final_))
+    Ok(SelectResult::new(&ctx.mk_tbls(&s.ops)?, &final_))
   }
 }
