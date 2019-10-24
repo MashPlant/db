@@ -14,11 +14,14 @@ use common::{*, Error::*, BareTy::*};
 use chrono::NaiveDate;
 use physics::ColInfo;
 
+// `data` points to the beginning of the whole data slot
+pub unsafe fn is_null(data: *const u8, ci_id: u32) -> bool { bsget(data as *const u32, ci_id as usize) }
+
 // `ptr` points to the location in this record where `val` should locate, not the start address of data slot
 // caller should guarantee `val` IS NOT NULL
 // you can allocate some useless space for ptr to do error check
-pub unsafe fn fill_ptr(ptr: *mut u8, col: ColTy, val: CLit) -> Result<()> {
-  match (col.ty, val.lit()) {
+pub unsafe fn fill_ptr(ptr: *mut u8, ty: ColTy, val: CLit) -> Result<()> {
+  match (ty.ty, val.lit()) {
     (_, Lit::Null) => debug_unreachable!(),
     (Bool, Lit::Bool(v)) => (ptr as *mut bool).write(v),
     (Int, Lit::Number(v)) => (ptr as *mut i32).write(v as i32),
@@ -26,8 +29,7 @@ pub unsafe fn fill_ptr(ptr: *mut u8, col: ColTy, val: CLit) -> Result<()> {
     (Date, Lit::Str(v)) => (ptr as *mut NaiveDate).write(date(v)?),
     (Date, Lit::Date(v)) => (ptr as *mut NaiveDate).write(v), // it is not likely to enter this case, because parser cannot produce Date
     (VarChar, Lit::Str(v)) => {
-      let size = col.size;
-      if v.len() > size as usize { return Err(PutStrTooLong { limit: size, actual: v.len() }); }
+      if v.len() > ty.size as usize { return Err(PutStrTooLong { limit: ty.size, actual: v.len() }); }
       ptr.write(v.len() as u8);
       ptr.add(1).copy_from_nonoverlapping(v.as_ptr(), v.len());
     }
@@ -59,6 +61,20 @@ pub fn date(date: &str) -> Result<NaiveDate> {
 
 pub fn like2re(like: &str) -> Result<Regex> {
   Regex::new(&escape_re(like)).map_err(|e| InvalidLike { like, reason: box e })
+}
+
+pub unsafe fn hash_pks(data: *const u8, pks: &[&ColInfo]) -> u128 {
+  const SEED: u128 = 19260817;
+  let mut hash = 0u128;
+  for &col in pks {
+    let ptr = data.add(col.off as usize);
+    match col.ty.ty {
+      Bool => hash = hash.wrapping_mul(SEED).wrapping_add(*ptr as u128),
+      Int | Float | Date => hash = hash.wrapping_mul(SEED).wrapping_add(*(ptr as *const u32) as u128),
+      VarChar => for &b in str_from_db(ptr).as_bytes() { hash = hash.wrapping_mul(SEED).wrapping_add(b as u128); }
+    }
+  }
+  hash
 }
 
 fn escape_re(like: &str) -> String {

@@ -3,7 +3,7 @@ use chrono::NaiveDate;
 use common::{*, Error::*, BareTy::*, CmpOp::*};
 use syntax::ast::*;
 use physics::*;
-use crate::is_null;
+use db::is_null;
 
 macro_rules! handle_op {
   ($cmp: ident, $op:expr, $p: ident, $l: expr, $r: expr) => {

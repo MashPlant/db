@@ -26,6 +26,8 @@ pub enum Error<'a> {
   NoDbInUse,
   TableExhausted,
   ColTooMany(usize),
+  // not support table with 0 col
+  ColTooFew,
   ColSizeTooBig(usize),
   TableNameTooLong(&'a str),
   ColNameTooLong(&'a str),
@@ -38,9 +40,12 @@ pub enum Error<'a> {
   NoSuchTable(&'a str),
   NoSuchCol(&'a str),
   NoSuchIndex(&'a str),
-  NoSuchForeign,
+  NoSuchForeign(&'a str),
+  NoSuchPrimary(&'a str),
   ForeignOnNotUnique(&'a str),
-  // this includes delete/drop table/update that actually affects a col with a foreign link
+  // ModifyCol... : delete/update that actually affects data with a foreign link. so there is a concrete val
+  // ModifyTable... : drop table/drop col, even no data with foreign link is affected, it is still rejected
+  ModifyTableWithForeignLink(&'a str),
   ModifyColWithForeignLink { col: &'a str, val: CLit<'a> },
   InvalidDate { date: &'a str, reason: chrono::ParseError },
   InvalidLike { like: &'a str, reason: Box<regex::Error> },
@@ -58,7 +63,9 @@ pub enum Error<'a> {
   PutDupOnUnique { col: &'a str, val: CLit<'a> },
   PutNonexistentForeign { col: &'a str, val: CLit<'a> },
   PutNotInCheck { col: &'a str, val: CLit<'a> },
-  PutDupCompositePrimary,
+  // this error is mainly for PutDupOnCompositePrimary
+  // but for convenience, duplication in add/drop primary also uses this error (so no need to get the dup value)
+  PutDupOnPrimary,
   AmbiguousCol(&'a str),
   // check list always rejects null (because it is meaningless)
   CheckNull(&'a str),

@@ -1,6 +1,7 @@
 #![allow(incomplete_features)]
 #![feature(const_generics)]
 #![feature(ptr_offset_from)]
+#![feature(box_syntax)]
 
 use std::{ptr::{self, NonNull}, marker::PhantomData, cmp::Ordering};
 
@@ -18,34 +19,32 @@ pub use alter::*;
 // using both lifetime parameter and const parameter will cause my rustc (1.40.0-nightly) to ICE, so just use pointer here
 pub struct Index<const T: BareTy> {
   db: *mut Db,
-  root: u32,
-  table: u32,
-  col: u32,
+  tp_id: u32,
+  ci_id: u32,
   _p: PhantomData<Cmp<{ T }>>,
 }
 
 impl<const T: BareTy> Index<{ T }> {
-  pub unsafe fn new(db: &mut Db, table: u32, col: u32) -> Index<{ T }> {
-    let tp = db.get_page::<TablePage>(table);
-    let root = tp.cols.get_unchecked_mut(col as usize).index;
-    Index { db, root, table, col, _p: PhantomData }
-  }
+  pub unsafe fn new(db: &mut Db, tp_id: u32, ci_id: u32) -> Index<{ T }> { Index { db, tp_id, ci_id, _p: PhantomData } }
 
   unsafe fn db<'a>(&mut self) -> &'a mut Db { self.db.r() }
-  unsafe fn rid_off(&self) -> usize { self.db.r().get_page::<IndexPage>(self.root).rid_off as usize }
+  // these 2 functions are not frequently called, so not save these 2 values in `Index` struct
+  unsafe fn root(&self) -> u32 { self.db.r().get_page::<TablePage>(self.tp_id).cols.get_unchecked_mut(self.ci_id as usize).index }
+  unsafe fn rid_off(&self) -> usize { self.db.r().get_page::<IndexPage>(self.root()).rid_off as usize }
 
   // caller guarantee data_rid doesn't exist in tree
   pub unsafe fn insert(&mut self, data: *const u8, rid: Rid) {
+    let root = self.root();
     let data_rid = self.make_data_rid(data, rid);
-    if let Some((overflow, split_page)) = self.do_insert(self.root, data_rid.ptr) {
+    if let Some((overflow, split_page)) = self.do_insert(root, data_rid.ptr) {
       let (new_id, new_ip) = self.db().alloc_page::<IndexPage>();
-      let old = self.db().get_page::<IndexPage>(self.root);
+      let old = self.db().get_page::<IndexPage>(root);
       (new_ip.next = !0, new_ip.count = 2, new_ip.leaf = false, new_ip.rid_off = old.rid_off);
       new_ip.cap = MAX_INDEX_BYTES as u16 / new_ip.slot_size();
       let p = new_ip.data.as_mut_ptr();
       let (slot_size, key_size) = (new_ip.slot_size() as usize, new_ip.key_size() as usize);
       p.copy_from_nonoverlapping(old.data.as_ptr(), key_size); // data_rid0
-      *(p.add(key_size) as *mut u32) = self.root; // child0
+      *(p.add(key_size) as *mut u32) = root; // child0
       p.add(slot_size).copy_from_nonoverlapping(overflow.as_ptr(), key_size); // data_rid1
       *(p.add(slot_size + key_size) as *mut u32) = split_page; // child1
       self.make_root(new_id);
@@ -93,7 +92,7 @@ impl<const T: BareTy> Index<{ T }> {
 
   // caller guarantee data_rid exists in tree
   pub unsafe fn delete(&mut self, data: *const u8, rid: Rid) {
-    self.do_delete(self.root, self.make_data_rid(data, rid).ptr);
+    self.do_delete(self.root(), self.make_data_rid(data, rid).ptr);
   }
 
   // return (pointer to the min key in page, does page need merge (count < cap / 2))
@@ -119,7 +118,7 @@ impl<const T: BareTy> Index<{ T }> {
       at!(pos).copy_from_nonoverlapping(new_min, key_size); // update dup key
       if need_merge {
         if ip.count == 1 {
-          debug_assert!(page == self.root); // only root can have so few slots
+          debug_assert!(page == self.root()); // only root can have so few slots
           self.db().dealloc_page(page);
           self.make_root(at_ch!(0));
         } else {
@@ -158,15 +157,14 @@ impl<const T: BareTy> Index<{ T }> {
   }
 
   unsafe fn make_root(&mut self, new_id: u32) {
-    self.root = new_id;
-    let tp = self.db().get_page::<TablePage>(self.table);
-    tp.cols.get_unchecked_mut(self.col as usize).index = new_id;
+    self.db().get_page::<TablePage>(self.tp_id).cols.get_unchecked_mut(self.ci_id as usize).index = new_id;
   }
 
   unsafe fn make_data_rid(&self, data: *const u8, rid: Rid) -> Align4U8 {
-    let data_rid = Align4U8::new(self.rid_off() + 4);
-    data_rid.ptr.copy_from_nonoverlapping(data, self.rid_off());
-    *(data_rid.ptr.add(self.rid_off()) as *mut Rid) = rid;
+    let rid_off = self.rid_off();
+    let data_rid = Align4U8::new(rid_off + 4);
+    data_rid.ptr.copy_from_nonoverlapping(data, rid_off);
+    *(data_rid.ptr.add(rid_off) as *mut Rid) = rid;
     data_rid
   }
 
@@ -179,7 +177,7 @@ impl<const T: BareTy> Index<{ T }> {
       // but it is now removed because we want to modify the `cap` in tests without modifying `slot_size`
       // assert_eq!(ip.cap, MAX_INDEX_BYTES as u16 / ip.slot_size());
       assert!(ip.count < ip.cap); // cannot have count == cap, the code depends on it
-      assert!(page == self.root || ip.cap / 2 <= ip.count);
+      assert!(page == self.root() || ip.cap / 2 <= ip.count);
       assert_eq!(ip.rid_off as usize, self.rid_off());
       for i in 1..ip.count as usize {
         assert_eq!(Cmp::<{ T }>::cmp_full(at!(i - 1), at!(i), self.rid_off()), Ordering::Less);
@@ -187,12 +185,9 @@ impl<const T: BareTy> Index<{ T }> {
     }
   }
 
+  // it is only called explicitly, so there is no `if cfg!(debug_assertions)`
   pub unsafe fn debug_check_all(&self) {
-    if cfg!(debug_assertions) {
-      let tp = self.pr().db().get_page::<TablePage>(self.table);
-      assert_eq!(tp.cols[self.col as usize].index, self.root);
-      self.dfs(self.root, ptr::null(), ptr::null());
-    }
+    self.dfs(self.root(), ptr::null(), ptr::null());
   }
 
   unsafe fn dfs(&self, page: u32, lb: *const u8, ub: *const u8) {

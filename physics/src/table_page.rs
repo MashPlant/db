@@ -4,12 +4,10 @@ use common::{*, Error::*};
 
 bitflags::bitflags! {
   pub struct ColFlags: u8 {
-    // PRIMARY implies NOTNULL, but doesn't imply UNIQUE
-    // PRIMARY itself is only useful when their are multiple primary keys
-    // if it is only a single primary key, UNIQUE will be set, UNIQUE and NOTNULL will detect all errors
     const PRIMARY = 0b1;
     const NOTNULL = 0b10;
     const UNIQUE = 0b100;
+    const NOTNULL1 = Self::PRIMARY.bits | Self::NOTNULL.bits; // if any bits in NOTNULL1 exists, this slot can't be null
   }
 }
 
@@ -56,6 +54,10 @@ impl ColInfo {
   pub unsafe fn idx_name<'a>(&self) -> Option<&'a str> {
     if self.index != !0 { Some(str_from_parts(self.idx_name.as_ptr(), self.idx_name_len as usize)) } else { None }
   }
+
+  pub fn unique(&self, primary_cnt: usize) -> bool {
+    self.flags.contains(ColFlags::UNIQUE) || (self.flags.contains(ColFlags::PRIMARY) && primary_cnt == 1)
+  }
 }
 
 #[repr(C)]
@@ -97,6 +99,10 @@ impl TablePage {
 
   pub unsafe fn cols<'a>(&self) -> &'a [ColInfo] {
     slice::from_raw_parts(self.cols.as_ptr(), self.col_num as usize)
+  }
+
+  pub unsafe fn primary_cols<'a>(&self) -> impl Iterator<Item=&'a ColInfo> {
+    self.cols().iter().filter(|ci| ci.flags.contains(ColFlags::PRIMARY))
   }
 
   pub unsafe fn get_ci<'a, 'b>(&mut self, col: &'b str) -> Result<'b, &'a mut ColInfo> {

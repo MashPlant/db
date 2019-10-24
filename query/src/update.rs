@@ -5,9 +5,9 @@ use std::cmp::Ordering::*;
 use common::{*, Error::*, BinOp::*, CmpOp::*, BareTy::*};
 use syntax::ast::*;
 use physics::*;
-use db::{Db, fill_ptr, data2lit};
-use index::{Index, handle_all, check_foreign_link};
-use crate::{is_null, predicate::one_where, filter::filter, InsertCtx};
+use db::{Db, is_null, fill_ptr, data2lit, hash_pks};
+use index::{Index, handle_all};
+use crate::{predicate::one_where, filter::filter, check_foreign_link, InsertCtx};
 
 unsafe fn check<'a>(e: &Expr<'a>, tp: &mut TablePage, re_cache: &mut HashMap<&'a str, Regex>) -> Result<'a, LitTy> {
   match e {
@@ -89,7 +89,7 @@ unsafe fn eval<'a>(e: &Expr<'a>, tp: &mut TablePage, data: *const u8, re_cache: 
 pub fn update<'a>(u: &Update<'a>, db: &mut Db) -> ModifyResult<'a, u32> {
   unsafe {
     let mut ctx = InsertCtx::new(db, u.table, None)?;
-    let f_links = db.foreign_links_to(ctx.tp_id);
+    let f_links = db.foreign_links_to(ctx.tp_id).collect::<Vec<_>>();
     let pred = one_where(&u.where_, ctx.tp)?;
     let mut re_cache = HashMap::new();
     for (col, e) in &u.sets {
@@ -107,7 +107,7 @@ pub fn update<'a>(u: &Update<'a>, db: &mut Db) -> ModifyResult<'a, u32> {
         let ci_id = ci.idx(&ctx.tp.cols);
         let val = CLit::new(eval(e, ctx.tp, data, &re_cache));
         if val.is_null() {
-          if ci.flags.contains(ColFlags::NOTNULL) { return Err(PutNullOnNotNull); }
+          if ci.flags.intersects(ColFlags::NOTNULL1) { return Err(PutNullOnNotNull); }
           bsset(buf.ptr as *mut u32, ci_id as usize);
         } else {
           bsdel(buf.ptr as *mut u32, ci_id as usize);
@@ -116,8 +116,8 @@ pub fn update<'a>(u: &Update<'a>, db: &mut Db) -> ModifyResult<'a, u32> {
         ctx.check_col(buf.ptr, ci_id, val, Some(rid))?; // it won't conflict with the old value (`data`)
       }
       if ctx.pks.len() > 1 {
-        ctx.pk_set.remove(&InsertCtx::hash_pks(data, &ctx.pks));
-        if !ctx.pk_set.insert(InsertCtx::hash_pks(buf.ptr, &ctx.pks)) { return Err(PutDupCompositePrimary); }
+        ctx.pk_set.remove(&hash_pks(data, &ctx.pks));
+        if !ctx.pk_set.insert(hash_pks(buf.ptr, &ctx.pks)) { return Err(PutDupOnPrimary); }
       }
       // now no error can occur
       for (col, _) in &u.sets {

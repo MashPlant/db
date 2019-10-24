@@ -33,7 +33,7 @@ impl PartialEq for IndexIter<'_> {
 
 impl<const T: BareTy> Index<{ T }> {
   pub unsafe fn iter<'a>(&mut self) -> IndexIter<'a> {
-    let mut page = self.root;
+    let mut page = self.root();
     loop {
       let ip = self.db().get_page::<IndexPage>(page);
       if ip.leaf { break IndexIter { db: self.db(), page, slot: 0 }; }
@@ -61,7 +61,7 @@ impl<const T: BareTy> Index<{ T }> {
   }
 
   unsafe fn do_upper_bound(&mut self, data_rid: *const u8) -> (u32, u16) {
-    let mut page = self.root;
+    let mut page = self.root();
     loop {
       self.debug_check(page);
       let ip = self.db().get_page::<IndexPage>(page);

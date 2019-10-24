@@ -70,9 +70,7 @@ pub(crate) unsafe fn filter<'a>(db: &mut Db, where_: &[impl Borrow<Cond<'a>>], t
                                 use_index: bool) -> Result<'a, ()> {
   if !use_index || !try_filter_with_index(db, where_, tp_id, &pred, &mut f)? {
     let tp = db.get_page::<TablePage>(tp_id);
-    for (data, rid) in db.record_iter(tp) {
-      if pred(data.as_ptr()) { f(data.as_ptr(), rid)?; }
-    }
+    for (data, rid) in db.record_iter(tp) { if pred(data) { f(data, rid)?; } }
   }
   Ok(())
 }

@@ -1,7 +1,7 @@
 use common::*;
 use std::fmt;
 
-#[derive(derive_more::From)]
+#[derive(derive_more::From, Debug)]
 pub enum Stmt<'a> {
   Insert(Insert<'a>),
   Delete(Delete<'a>),
@@ -17,10 +17,19 @@ pub enum Stmt<'a> {
   ShowTable(&'a str),
   ShowTables,
   CreateIndex(CreateIndex<'a>),
-  DropIndex(DropIndex<'a>),
+  DropIndex {
+    index: &'a str,
+    // `table` is only for check, doesn't provide any information
+    // "drop index" => table is None; "alter table drop index" => table is Some
+    table: Option<&'a str>,
+  },
   Rename { old: &'a str, new: &'a str },
   AddForeign(AddForeign<'a>),
   DropForeign { table: &'a str, col: &'a str },
+  AddPrimary { table: &'a str, cols: Vec<&'a str> },
+  DropPrimary { table: &'a str, cols: Vec<&'a str> },
+  AddCol { table: &'a str, col: ColDecl<'a> },
+  DropCol { table: &'a str, col: &'a str },
 }
 
 #[derive(Debug)]
@@ -75,14 +84,6 @@ pub struct CreateIndex<'a> {
   pub index: &'a str,
   pub table: &'a str,
   pub col: &'a str,
-}
-
-#[derive(Debug)]
-pub struct DropIndex<'a> {
-  pub index: &'a str,
-  // `table` is only for check, doesn't provide any information
-  // "drop index" => table is None; "alter table drop index" => table is Some
-  pub table: Option<&'a str>,
 }
 
 #[derive(Debug)]
@@ -141,21 +142,7 @@ impl<'a> Cond<'a> {
 }
 
 #[derive(Copy, Clone)]
-pub enum Atom<'a> {
-  ColRef(ColRef<'a>),
-  Lit(CLit<'a>),
-}
-
-impl fmt::Debug for Stmt<'_> {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    use Stmt::*;
-    match self {
-      Insert(x) => write!(f, "{:?}", x), Delete(x) => write!(f, "{:?}", x), Select(x) => write!(f, "{:?}", x), Update(x) => write!(f, "{:?}", x), CreateTable(x) => write!(f, "{:?}", x), CreateIndex(x) => write!(f, "{:?}", x), DropIndex(x) => write!(f, "{:?}", x), AddForeign(x) => write!(f, "{:?}", x),
-      CreateDb(x) => write!(f, "CreateDb({:?})", x), DropDb(x) => write!(f, "DropDb({:?})", x), ShowDb(x) => write!(f, "ShowDb({:?})", x), UseDb(x) => write!(f, "UseDb({:?})", x), DropTable(x) => write!(f, "DropTable({:?})", x), ShowTable(x) => write!(f, "ShowTable({:?})", x), ShowDbs => write!(f, "ShowDbs"), ShowTables => write!(f, "ShowTables"),
-      Rename { old, new } => write!(f, "Rename({:?} => {:?})", old, new), DropForeign { table, col } => write!(f, "DropForeign({}.{})", table, col)
-    }
-  }
-}
+pub enum Atom<'a> { ColRef(ColRef<'a>), Lit(CLit<'a>) }
 
 impl fmt::Debug for ColRef<'_> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

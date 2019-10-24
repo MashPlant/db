@@ -1,9 +1,9 @@
 use std::str::{self, FromStr};
 use typed_arena::Arena;
-use either::Either::{self, Left as L, Right as R};
 
 use common::{BareTy::{*, self}, ParserError as PE, ParserErrorKind::*, Lit, CLit, ColTy, AggOp::*, BinOp::*, CmpOp::*};
 use crate::ast::*;
+use crate::Stmt::AddPrimary;
 
 pub struct Parser<'a> {
   pub pe: Vec<PE<'a>>,
@@ -31,7 +31,6 @@ impl<'p> Token<'p> {
   }
 }
 
-type Field<'p> = Either<ColDecl<'p>, ColCons<'p>>;
 type FieldList<'p> = (Vec<ColDecl<'p>>, Vec<ColCons<'p>>);
 
 #[parser_macros::lalr1(Program)]
@@ -143,19 +142,23 @@ impl<'p> Parser<'p> {
   #[rule(Stmt -> Drop DataBase Id)]
   fn stmt_drop_db(_: Token, _: Token, db: &'p str) -> Stmt<'p> { Stmt::DropDb(db) }
   #[rule(Stmt -> Use Id)]
-  fn stmt_use_db(_: Token, db: &'p str) -> Stmt<'p> { Stmt::UseDb(db) }
+  fn stmt_use_db0(_: Token, db: &'p str) -> Stmt<'p> { Stmt::UseDb(db) }
+  #[rule(Stmt -> Use DataBase Id)]
+  fn stmt_use_db1(_: Token, _: Token, db: &'p str) -> Stmt<'p> { Stmt::UseDb(db) }
   #[rule(Stmt -> Drop Table Id)]
   fn stmt_drop_table(_: Token, _: Token, table: &'p str) -> Stmt<'p> { Stmt::DropTable(table) }
   #[rule(Stmt -> Create Index Id On Id LPar Id RPar)]
   fn stmt_create_index(_: Token, _: Token, index: &'p str, _: Token, table: &'p str, _: Token, col: &'p str, _: Token) -> Stmt<'p> { CreateIndex { index, table, col }.into() }
   #[rule(Stmt -> Drop Index Id)]
-  fn stmt_drop_index(_: Token, _: Token, index: &'p str) -> Stmt<'p> { DropIndex { index, table: None }.into() }
+  fn stmt_drop_index(_: Token, _: Token, index: &'p str) -> Stmt<'p> { Stmt::DropIndex { index, table: None } }
   #[rule(Stmt -> Create Table Id LPar FieldList RPar)]
-  fn stmt_create_table(_: Token, _: Token, table: &'p str, _: Token, (cols, mut cons): FieldList<'p>, _: Token) -> Stmt<'p> { CreateTable { table, cols, cons }.into() }
+  fn stmt_create_table(_: Token, _: Token, table: &'p str, _: Token, (cols, cons): FieldList<'p>, _: Token) -> Stmt<'p> { CreateTable { table, cols, cons }.into() }
   #[rule(Stmt -> Show Tables)]
   fn stmt_show_tables(_: Token, _: Token) -> Stmt<'p> { Stmt::ShowTables }
   #[rule(Stmt -> Desc Id)]
-  fn stmt_show_table(_: Token, table: &'p str) -> Stmt<'p> { Stmt::ShowTable(table) }
+  fn stmt_show_table0(_: Token, table: &'p str) -> Stmt<'p> { Stmt::ShowTable(table) }
+  #[rule(Stmt -> Show Table Id)]
+  fn stmt_show_table1(_: Token, _: Token, table: &'p str) -> Stmt<'p> { Stmt::ShowTable(table) }
   #[rule(Stmt -> Select Mul From IdList WhereM)]
   fn stmt_select0(_: Token, _: Token, _: Token, tables: Vec<&'p str>, where_: Vec<Cond<'p>>) -> Stmt<'p> { Select { ops: None, tables, where_ }.into() }
   #[rule(Stmt -> Select AggList From IdList WhereM)]
@@ -172,13 +175,21 @@ impl<'p> Parser<'p> {
   #[rule(Stmt -> AlterTable Id Add1 Index Id On LPar Id RPar)]
   fn alter_create_index1(_: Token, table: &'p str, _: Token, _: Token, index: &'p str, _: Token, _: Token, col: &'p str, _: Token) -> Stmt<'p> { CreateIndex { index, table, col }.into() }
   #[rule(Stmt -> AlterTable Id Drop Index Id)]
-  fn alter_drop_index1(_: Token, table: &'p str, _: Token, _: Token, index: &'p str) -> Stmt<'p> { DropIndex { index, table: Some(table) }.into() }
+  fn alter_drop_index1(_: Token, table: &'p str, _: Token, _: Token, index: &'p str) -> Stmt<'p> { Stmt::DropIndex { index, table: Some(table) } }
   #[rule(Stmt -> AlterTable Id RenameTo Id)]
   fn alter_rename(_: Token, old: &'p str, _: Token, new: &'p str) -> Stmt<'p> { Stmt::Rename { old, new } }
   #[rule(Stmt -> AlterTable Id Add1 ForeignKey LPar Id RPar References Id LPar Id RPar)]
   fn alter_add_foreign(_: Token, table: &'p str, _: Token, _: Token, _: Token, col: &'p str, _: Token, _: Token, f_table: &'p str, _: Token, f_col: &'p str, _: Token) -> Stmt<'p> { AddForeign { table, col, f_table, f_col }.into() }
   #[rule(Stmt -> AlterTable Id Drop ForeignKey Id)]
   fn alter_drop_foreign(_: Token, table: &'p str, _: Token, _: Token, col: &'p str) -> Stmt<'p> { Stmt::DropForeign { table, col } }
+  #[rule(Stmt -> AlterTable Id Add1 PrimaryKey LPar IdList RPar)]
+  fn alter_add_primary(_: Token, table: &'p str, _: Token, _: Token, _: Token, cols: Vec<&'p str>, _: Token) -> Stmt<'p> { AddPrimary { table, cols }.into() }
+  #[rule(Stmt -> AlterTable Id Drop PrimaryKey LPar IdList RPar)]
+  fn alter_drop_primary(_: Token, table: &'p str, _: Token, _: Token, _: Token, cols: Vec<&'p str>, _: Token) -> Stmt<'p> { Stmt::DropPrimary { table, cols } }
+  #[rule(Stmt -> AlterTable Id Add1 ColDecl)]
+  fn alter_add_col(_: Token, table: &'p str, _: Token, col: ColDecl<'p>) -> Stmt<'p> { Stmt::AddCol { table, col } }
+  #[rule(Stmt -> AlterTable Id Drop Id)]
+  fn alter_drop_col(_: Token, table: &'p str, _: Token, col: &'p str) -> Stmt<'p> { Stmt::DropCol { table, col } }
 
   #[rule(WhereM -> Where CondList)]
   fn where_m1(_: Token, where_: Vec<Cond<'p>>) -> Vec<Cond<'p>> { where_ }
@@ -250,27 +261,31 @@ impl<'p> Parser<'p> {
   #[rule(SetList -> SetList Comma Id Eq Expr)]
   fn set_list1(mut sl: Vec<(&'p str, Expr<'p>)>, _: Token, col: &'p str, _: Token, r: Expr<'p>) -> Vec<(&'p str, Expr<'p>)> { (sl.push((col, r)), sl).1 }
 
-  #[rule(FieldList -> Field)]
-  fn field_list0(f: Field<'p>) -> FieldList<'p> { match f { L(l) => (vec![l], vec![]), R(r) => (vec![], vec![r]) } }
-  #[rule(FieldList -> FieldList Comma Field)]
-  fn field_list1((mut cols, mut cons): FieldList<'p>, _: Token, f: Field<'p>) -> FieldList<'p> { (match f { L(l) => cols.push(l), R(r) => cons.push(r) }, (cols, cons)).1 }
+  #[rule(FieldList -> ColDecl)]
+  fn field_list0(c: ColDecl<'p>) -> FieldList<'p> { (vec![c], vec![]) }
+  #[rule(FieldList -> ColCons)]
+  fn field_list1(c: ColCons<'p>) -> FieldList<'p> { (vec![], vec![c]) }
+  #[rule(FieldList -> FieldList Comma ColDecl)]
+  fn field_list2(mut fl: FieldList<'p>, _: Token, c: ColDecl<'p>) -> FieldList<'p> { (fl.0.push(c), fl).1 }
+  #[rule(FieldList -> FieldList Comma ColCons)]
+  fn field_list3(mut fl: FieldList<'p>, _: Token, c: ColCons<'p>) -> FieldList<'p> { (fl.1.push(c), fl).1 }
 
-  #[rule(Field -> Id ColTy)]
-  fn field0(col: &'p str, ty: ColTy) -> Field<'p> { L(ColDecl { col, ty, notnull: false, dft: None }) }
-  #[rule(Field -> Id ColTy NotNull)]
-  fn field1(col: &'p str, ty: ColTy, _: Token) -> Field<'p> { L(ColDecl { col, ty, notnull: true, dft: None }) }
-  #[rule(Field -> Id ColTy Default Lit)]
-  fn field2(col: &'p str, ty: ColTy, _: Token, dft: CLit<'p>) -> Field<'p> { L(ColDecl { col, ty, notnull: false, dft: Some(dft) }) }
-  #[rule(Field -> Id ColTy NotNull Default Lit)]
-  fn field3(col: &'p str, ty: ColTy, _: Token, _: Token, dft: CLit<'p>) -> Field<'p> { L(ColDecl { col, ty, notnull: true, dft: Some(dft) }) }
-  #[rule(Field -> ForeignKey LPar Id RPar References Id LPar Id RPar)]
-  fn field5(_: Token, _: Token, col: &'p str, _: Token, _: Token, f_table: &'p str, _: Token, f_col: &'p str, _: Token) -> Field<'p> { R(ColCons::Foreign { col, f_table, f_col }) }
-  #[rule(Field -> PrimaryKey LPar IdList RPar)]
-  fn field6(_: Token, _: Token, il: Vec<&'p str>, _: Token) -> Field<'p> { R(ColCons::Primary(il)) }
-  #[rule(Field -> Unique LPar Id RPar)]
-  fn field7(_: Token, _: Token, col: &'p str, _: Token) -> Field<'p> { R(ColCons::Unique(col)) }
-  #[rule(Field -> Check LPar Id In LPar LitList RPar RPar)]
-  fn field8(_: Token, _: Token, col: &'p str, _: Token, _: Token, ll: Vec<CLit<'p>>, _: Token, _: Token) -> Field<'p> { R(ColCons::Check(col, ll)) }
+  #[rule(ColDecl -> Id ColTy)]
+  fn field0(col: &'p str, ty: ColTy) -> ColDecl<'p> { ColDecl { col, ty, notnull: false, dft: None } }
+  #[rule(ColDecl -> Id ColTy NotNull)]
+  fn field1(col: &'p str, ty: ColTy, _: Token) -> ColDecl<'p> { ColDecl { col, ty, notnull: true, dft: None } }
+  #[rule(ColDecl -> Id ColTy Default Lit)]
+  fn field2(col: &'p str, ty: ColTy, _: Token, dft: CLit<'p>) -> ColDecl<'p> { ColDecl { col, ty, notnull: false, dft: Some(dft) } }
+  #[rule(ColDecl -> Id ColTy NotNull Default Lit)]
+  fn field3(col: &'p str, ty: ColTy, _: Token, _: Token, dft: CLit<'p>) -> ColDecl<'p> { ColDecl { col, ty, notnull: true, dft: Some(dft) } }
+  #[rule(ColCons -> ForeignKey LPar Id RPar References Id LPar Id RPar)]
+  fn field5(_: Token, _: Token, col: &'p str, _: Token, _: Token, f_table: &'p str, _: Token, f_col: &'p str, _: Token) -> ColCons<'p> { ColCons::Foreign { col, f_table, f_col } }
+  #[rule(ColCons -> PrimaryKey LPar IdList RPar)]
+  fn field6(_: Token, _: Token, il: Vec<&'p str>, _: Token) -> ColCons<'p> { ColCons::Primary(il) }
+  #[rule(ColCons -> Unique LPar Id RPar)]
+  fn field7(_: Token, _: Token, col: &'p str, _: Token) -> ColCons<'p> { ColCons::Unique(col) }
+  #[rule(ColCons -> Check LPar Id In LPar LitList RPar RPar)]
+  fn field8(_: Token, _: Token, col: &'p str, _: Token, _: Token, ll: Vec<CLit<'p>>, _: Token, _: Token) -> ColCons<'p> { ColCons::Check(col, ll) }
 
   #[rule(Agg -> ColRef)]
   fn agg0(col: ColRef<'p>) -> Agg<'p> { Agg { col, op: None } }

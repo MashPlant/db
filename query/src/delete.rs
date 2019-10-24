@@ -1,13 +1,13 @@
 use common::{*, BareTy::*};
 use syntax::ast::*;
-use db::Db;
-use index::{Index, handle_all, check_foreign_link};
-use crate::{predicate::one_where, is_null, filter::filter};
+use db::{Db, is_null};
+use index::{Index, handle_all};
+use crate::{predicate::one_where, filter::filter, check_foreign_link};
 
 pub fn delete<'a>(d: &Delete<'a>, db: &mut Db) -> ModifyResult<'a, u32> {
   unsafe {
     let (tp_id, tp) = db.get_tp(d.table)?;
-    let f_links = db.foreign_links_to(tp_id);
+    let f_links = db.foreign_links_to(tp_id).collect::<Vec<_>>();
     let pred = one_where(&d.where_, tp)?;
     let mut cnt = 0;
     if let Err(e) = filter(db.pr(), &d.where_, tp_id, pred, |data, rid| {

@@ -5,8 +5,7 @@ use common::{*, BareTy::*, Error::*};
 use syntax::ast::*;
 use physics::*;
 use index::{Index, cmp::Cmp, handle_all};
-use db::{Db, fill_ptr, ptr2lit};
-use crate::is_null;
+use db::{Db, is_null, fill_ptr, ptr2lit, hash_pks};
 
 // update can also use this
 pub(crate) struct InsertCtx<'a> {
@@ -14,7 +13,7 @@ pub(crate) struct InsertCtx<'a> {
   pub(crate) tp_id: u32,
   pub(crate) tp: &'a mut TablePage,
   pub(crate) pks: Vec<&'a ColInfo>,
-  pub(crate) pk_set: HashSet<u64>,
+  pub(crate) pk_set: HashSet<u128>,
   // these 2 not used in update (it may be a little waste, but is acceptable)
   cols: Option<Box<[u32]>>,
   dfts: Box<[CLit<'a>]>,
@@ -23,9 +22,9 @@ pub(crate) struct InsertCtx<'a> {
 impl<'a> InsertCtx<'a> {
   pub(crate) unsafe fn new<'b>(db: &mut Db, table: &'b str, cols: Option<&[&'b str]>) -> Result<'b, InsertCtx<'a>> {
     let (tp_id, tp) = db.get_tp(table)?;
-    let pks = tp.cols().iter().filter(|ci| ci.flags.contains(ColFlags::PRIMARY)).collect::<Vec<_>>();
+    let pks = tp.primary_cols().collect::<Vec<_>>();
     let pk_set: HashSet<_> = if pks.len() > 1 {
-      db.record_iter(tp).map(|(data, _)| Self::hash_pks(data.as_ptr(), &pks)).collect()
+      db.record_iter(tp).map(|(data, _)| hash_pks(data, &pks)).collect()
     } else { HashSet::new() }; // no need to collect
     let cols = if let Some(cols1) = cols {
       let mut cols = vec![0; cols1.len()].into_boxed_slice();
@@ -38,7 +37,7 @@ impl<'a> InsertCtx<'a> {
     for (idx, ci) in tp.cols().iter().enumerate() {
       if ci.check != !0 && ((ci.check & 1) == 1) {
         let cp = db.get_page::<CheckPage>(ci.check >> 1);
-        let ptr = cp.data.as_ptr().add(cp.count as usize * tp.size as usize); // the one-past-last slot
+        let ptr = cp.data.as_ptr().add(cp.count as usize * ci.ty.size() as usize); // the one-past-last slot
         *dfts.get_unchecked_mut(idx) = ptr2lit(ptr, ci.ty.ty);
       }
     }
@@ -73,7 +72,7 @@ impl<'a> InsertCtx<'a> {
     for (idx, &val) in vals.iter().enumerate() {
       let ci = self.tp.cols.get_unchecked(idx);
       if val.is_null() {
-        if ci.flags.contains(ColFlags::NOTNULL) { return Err(PutNullOnNotNull); }
+        if ci.flags.intersects(ColFlags::NOTNULL1) { return Err(PutNullOnNotNull); }
         bsset(buf as *mut u32, idx);
       } else {
         fill_ptr(buf.add(ci.off as usize), ci.ty, val)?;
@@ -83,7 +82,7 @@ impl<'a> InsertCtx<'a> {
       self.check_col(buf, ci_id, *vals.get_unchecked(ci_id as usize), None)?;
     }
     if self.pks.len() > 1 {
-      if !self.pk_set.insert(InsertCtx::hash_pks(buf, &self.pks)) { return Err(PutDupCompositePrimary); }
+      if !self.pk_set.insert(hash_pks(buf, &self.pks)) { return Err(PutDupOnPrimary); }
     }
     // now no error can occur
     self.tp.count += 1;
@@ -112,8 +111,7 @@ impl<'a> InsertCtx<'a> {
     if !is_null(data, ci_id) {
       let ci = self.tp.cols.get_unchecked(ci_id as usize);
       let ptr = data.add(ci.off as usize);
-      if ci.flags.contains(ColFlags::UNIQUE) {
-        debug_assert_ne!(ci.index, !0); // all unique keys have index, `create_table` guarantee this
+      if ci.unique(self.pks.len()) {
         macro_rules! handle {
           ($ty: ident) => {{
             let mut index = Index::<{ $ty }>::new(self.db, self.tp_id, ci_id);
@@ -150,22 +148,6 @@ impl<'a> InsertCtx<'a> {
       }
     }
     Ok(())
-  }
-
-  pub unsafe fn hash_pks(data: *const u8, pks: &[&ColInfo]) -> u64 {
-    const SEED: u64 = 19260817;
-    let mut hash = 0u64;
-    for &col in pks {
-      let ptr = data.add(col.off as usize);
-      match col.ty.ty {
-        Bool => hash = hash.wrapping_mul(SEED).wrapping_add(*ptr as u64),
-        Int | Float | Date => hash = hash.wrapping_mul(SEED).wrapping_add(*(ptr as *const u32) as u64),
-        VarChar => for &b in str_from_db(ptr).as_bytes() {
-          hash = hash.wrapping_mul(SEED).wrapping_add(b as u64);
-        }
-      }
-    }
-    hash
   }
 }
 

@@ -49,10 +49,14 @@ impl Eval {
       &ShowTable(table) => self.db()?.show_table(table)?.into(),
       ShowTables => self.db()?.show_tables().into(),
       CreateIndex(c) => (index::create_index(self.db()?, c)?, "".into()).1,
-      DropIndex(d) => (self.db()?.drop_index(d)?, "".into()).1,
+      &DropIndex { index, table } => (self.db()?.drop_index(index, table)?, "".into()).1,
       &Rename { old, new } => (self.db()?.rename_table(old, new)?, "".into()).1,
       AddForeign(a) => (index::add_foreign(self.db()?, a)?, "".into()).1,
-      DropForeign { table, col } => (self.db()?.drop_foreign(table, col)?, "".into()).1
+      &DropForeign { table, col } => (self.db()?.drop_foreign(table, col)?, "".into()).1,
+      AddPrimary { table, cols } => (index::add_primary(self.db()?, table, cols)?, "".into()).1,
+      DropPrimary { table, cols } => (index::drop_primary(self.db()?, table, cols)?, "".into()).1,
+      AddCol { table, col } => (index::add_col(self.db()?, table, col)?, "".into()).1,
+      &DropCol { table, col } => (index::drop_col(self.db()?, table, col)?, "".into()).1,
     })
   }
 

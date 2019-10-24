@@ -53,6 +53,7 @@ impl Db {
       if c.table.len() > MAX_TABLE_NAME { return Err(TableNameTooLong(c.table)); }
       if self.get_tp(c.table).is_ok() { return Err(DupTable(c.table)); }
       if c.cols.len() > MAX_COL { return Err(ColTooMany(c.cols.len())); }
+      if c.cols.is_empty() { return Err(ColTooFew); }
       // its V will be used later to validate col cons, only allow one primary / foreign / check for one col
       let mut cols = IndexMap::default();
       for cd in &c.cols {
@@ -72,8 +73,9 @@ impl Db {
           ColCons::Foreign { col, f_table, f_col } => {
             let (idx, _, has_pfuc) = if let Some(x) = cols.get_full_mut(col) { x } else { return Err(NoSuchCol(col)); };
             if (has_pfuc.1, has_pfuc.1 = true).0 { return Err(DupConstraint(col)); }
-            let f_ci = self.get_tp(f_table)?.1.get_ci(f_col)?;
-            if !f_ci.flags.contains(ColFlags::UNIQUE) { return Err(ForeignOnNotUnique(f_col)); }
+            let f_tp = self.get_tp(f_table)?.1;
+            let f_ci = f_tp.get_ci(f_col)?;
+            if !f_ci.unique(f_tp.primary_cols().count()) { return Err(ForeignOnNotUnique(f_col)); }
             let (foreign, own) = (f_ci.ty, c.cols.get_unchecked(idx).ty);
             if foreign != own { return Err(IncompatibleForeignTy { foreign, own }); };
           }
@@ -97,18 +99,14 @@ impl Db {
       }
       for col in &c.cols {
         if let Some(dft) = col.dft {
-          if !dft.is_null() {
-            fill_ptr(Align4U8::new(col.ty.size() as usize).ptr, col.ty, dft)?;
-          }
+          // you can set default = null to a notnull col, such insertion will be rejected anyway
+          if !dft.is_null() { fill_ptr(Align4U8::new(col.ty.size() as usize).ptr, col.ty, dft)?; }
         }
       }
 
       // validate size, the size is calculated in the same way as below
       let mut size = (c.cols.len() + 31) / 32 * 4; // null bitset
-      for c in &c.cols {
-        size += c.ty.size() as usize;
-        if size > MAX_DATA_BYTE { return Err(ColSizeTooBig(size)); }
-      }
+      for c in &c.cols { size += c.ty.size() as usize; }
       size = (size + 3) & !3; // it should be 4-aligned to keep the alignment of the next slot
       if size > MAX_DATA_BYTE { return Err(ColSizeTooBig(size)); }
 
@@ -122,7 +120,7 @@ impl Db {
         tp.cols.get_unchecked_mut(i).init(c.ty, size, c.col, c.notnull);
         size += c.ty.size();
       }
-      size = (size + 3) & !3; // at last it should be aligned to keep the alignment of the next slot
+      size = (size + 3) & !3;
       tp.init(size.max(MIN_SLOT_SIZE as u16), c.cols.len() as u8, c.table);
 
       // handle table cons
@@ -131,8 +129,6 @@ impl Db {
           ColCons::Primary(pks) => for col in pks {
             let ci = tp.cols.get_unchecked_mut(cols.get_full(col).unchecked_unwrap().0);
             ci.flags.set(ColFlags::PRIMARY, true);
-            ci.flags.set(ColFlags::NOTNULL, true);
-            if primary_cnt == 1 { ci.flags.set(ColFlags::UNIQUE, true); }
           }
           ColCons::Foreign { col, f_table, f_col } => {
             let ci = tp.cols.get_unchecked_mut(cols.get_full(col).unchecked_unwrap().0);
@@ -173,18 +169,16 @@ impl Db {
 
       *dp.tables.get_unchecked_mut(dp.table_num as usize) = id;
       dp.table_num += 1;
-      tp.cols().iter()
-        .filter(|ci| ci.flags.contains(ColFlags::UNIQUE) || ci.f_table != !0)
-        .for_each(|ci| self.alloc_index(ci.pr(), "").unchecked_unwrap());
+      tp.cols().iter().filter(|ci| ci.unique(primary_cnt) || ci.f_table != !0).for_each(|ci| self.alloc_index(ci.pr(), "").unchecked_unwrap());
       Ok(())
     }
   }
 
   // return all the (tp_id1, ci_id1, ci_id), where tp_id1.ci_id1 has foreign link to tp_id.ci_id
-  pub unsafe fn foreign_links_to(&mut self, tp_id: u32) -> Vec<(u32, u8, u8)> {
-    self.dp().tables().iter().flat_map(|&tp_id1|
+  pub unsafe fn foreign_links_to<'a>(&'a mut self, tp_id: u32) -> impl Iterator<Item=(u32, u8, u8)> + 'a {
+    self.dp().tables().iter().flat_map(move |&tp_id1|
       self.get_page::<TablePage>(tp_id1).cols().iter().enumerate().filter_map(move |(ci_id1, ci1)|
-        if ci1.f_table == tp_id { Some((tp_id1, ci_id1 as u8, ci1.f_col)) } else { None })).collect()
+        if ci1.f_table == tp_id { Some((tp_id1, ci_id1 as u8, ci1.f_col)) } else { None }))
   }
 }
 

@@ -4,14 +4,14 @@ use std::{fmt::Write, mem};
 use common::{*, BareTy::*, Error::*, AggOp::*, CmpOp::*};
 use syntax::ast::*;
 use physics::*;
-use db::{Db, data2lit};
-use crate::{predicate::{and, one_predicate, cross_predicate}, filter::filter, is_null};
+use db::{Db, data2lit, is_null};
+use crate::{predicate::{and, one_predicate, cross_predicate}, filter::filter};
 use chrono::NaiveDate;
 use ordslice::Ext;
 
 #[derive(Copy, Clone)]
 pub struct Col<'a> {
-  // if op == Some(CountAll), `idx` is a meaningless value, `ci` is None, or `ci` will always be Some
+  // if op == Some(CountAll), `ci_id` is a meaningless value, `ci` is None, otherwise `ci` will always be Some
   pub op: Option<AggOp>,
   pub ci_id: u32,
   pub ci: Option<&'a ColInfo>,

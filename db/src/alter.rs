@@ -1,6 +1,5 @@
 use common::{*, Error::*};
 use physics::*;
-use syntax::ast::*;
 use crate::Db;
 
 impl Db {
@@ -16,24 +15,26 @@ impl Db {
     Ok(())
   }
 
-  pub fn drop_index<'a>(&mut self, d: &DropIndex<'a>) -> Result<'a, ()> {
+  pub fn drop_index<'a>(&mut self, index: &'a str, table: Option<&'a str>) -> Result<'a, ()> {
     unsafe {
       for &tp_id in self.dp().tables() {
         let tp = self.get_page::<TablePage>(tp_id);
         for ci in tp.cols() {
-          if ci.idx_name().filter(|&x| !x.is_empty() && x == d.index).is_some() {
-            // d.table is only for error checking
-            match d.table { Some(t) if t != tp.name() => return Err(NoSuchIndex(d.index)), _ => {} };
-            self.dealloc_index(ci.pr());
+          if ci.idx_name().filter(|&x| !x.is_empty() && x == index).is_some() {
+            // `table` is only for error checking
+            match table { Some(t) if t != tp.name() => return Err(NoSuchIndex(index)), _ => {} };
+            self.dealloc_index(ci.index);
+            ci.pr().index = !0;
             return Ok(());
           }
         }
       }
-      return Err(NoSuchIndex(d.index));
+      return Err(NoSuchIndex(index));
     }
   }
 
-  pub unsafe fn dealloc_index(&mut self, ci: &mut ColInfo) {
+  // only deallocate index pages, ColInfo::index is not affected
+  pub unsafe fn dealloc_index(&mut self, root: u32) {
     unsafe fn dfs(db: &mut Db, page: u32) {
       let ip = db.get_page::<IndexPage>(page);
       let (slot_size, key_size) = (ip.slot_size() as usize, ip.key_size() as usize);
@@ -41,8 +42,7 @@ impl Db {
       if !ip.leaf { for i in 0..ip.count as usize { dfs(db, at_ch!(i)); } }
       db.dealloc_page(page);
     }
-    dfs(self, ci.index);
-    ci.index = !0;
+    dfs(self, root);
   }
 }
 
@@ -51,7 +51,7 @@ impl Db {
   pub fn drop_foreign<'a>(&mut self, table: &'a str, col: &'a str) -> Result<'a, ()> {
     unsafe {
       let ci = self.get_tp(table)?.1.get_ci(col)?;
-      if ci.f_table == !0 { return Err(NoSuchForeign); }
+      if ci.f_table == !0 { return Err(NoSuchForeign(col)); }
       ci.f_table = !0;
       Ok(())
     }
