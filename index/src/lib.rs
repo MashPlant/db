@@ -37,12 +37,12 @@ impl<const T: BareTy> Index<{ T }> {
     let root = self.root();
     let data_rid = self.make_data_rid(data, rid);
     if let Some((overflow, split_page)) = self.do_insert(root, data_rid.ptr) {
-      let (new_id, new_ip) = self.db().alloc_page::<IndexPage>();
+      let (new_id, new) = self.db().alloc_page::<IndexPage>();
       let old = self.db().get_page::<IndexPage>(root);
-      (new_ip.next = !0, new_ip.count = 2, new_ip.leaf = false, new_ip.rid_off = old.rid_off);
-      new_ip.cap = MAX_INDEX_BYTES as u16 / new_ip.slot_size();
-      let p = new_ip.data.as_mut_ptr();
-      let (slot_size, key_size) = (new_ip.slot_size() as usize, new_ip.key_size() as usize);
+      (new.next = !0, new.count = 2, new.leaf = false, new.rid_off = old.rid_off);
+      new.cap = MAX_INDEX_BYTES as u16 / new.slot_size();
+      let p = new.data.as_mut_ptr();
+      let (slot_size, key_size) = (new.slot_size() as usize, new.key_size() as usize);
       p.copy_from_nonoverlapping(old.data.as_ptr(), key_size); // data_rid0
       *(p.add(key_size) as *mut u32) = root; // child0
       p.add(slot_size).copy_from_nonoverlapping(overflow.as_ptr(), key_size); // data_rid1
@@ -187,28 +187,60 @@ impl<const T: BareTy> Index<{ T }> {
 
   // it is only called explicitly, so there is no `if cfg!(debug_assertions)`
   pub unsafe fn debug_check_all(&self) {
-    self.dfs(self.root(), ptr::null(), ptr::null());
-  }
-
-  unsafe fn dfs(&self, page: u32, lb: *const u8, ub: *const u8) {
-    self.debug_check(page);
-    let ip = self.pr().db().get_page::<IndexPage>(page);
-    let (slot_size, key_size) = (ip.slot_size() as usize, ip.key_size() as usize);
-    macro_rules! at { ($pos: expr) => { ip.data.as_mut_ptr().add($pos * slot_size) }; }
-    macro_rules! at_ch { ($pos: expr) => { *(ip.data.as_mut_ptr().add($pos * slot_size + key_size) as *mut u32) }; }
-    if !lb.is_null() {
-      // the min key must be the dup key
-      assert_eq!(Cmp::<{ T }>::cmp_full(lb, at!(0), self.rid_off()), Ordering::Equal);
-    }
-    if !ub.is_null() {
-      assert_eq!(Cmp::<{ T }>::cmp_full(at!(ip.count as usize - 1), ub, self.rid_off()), Ordering::Less);
-    }
-    if !ip.leaf {
-      for i in 0..ip.count as usize {
-        let ub = if i + 1 == ip.count as usize { ub } else { at!(i + 1) };
-        self.dfs(at_ch!(i), at!(i), ub);
+    unsafe fn dfs<const T: BareTy>(s: &Index<{ T }>, page: u32, lb: *const u8, ub: *const u8) {
+      s.debug_check(page);
+      let ip = s.pr().db().get_page::<IndexPage>(page);
+      let (slot_size, key_size) = (ip.slot_size() as usize, ip.key_size() as usize);
+      macro_rules! at { ($pos: expr) => { ip.data.as_mut_ptr().add($pos * slot_size) }; }
+      macro_rules! at_ch { ($pos: expr) => { *(ip.data.as_mut_ptr().add($pos * slot_size + key_size) as *mut u32) }; }
+      if !lb.is_null() {
+        // the min key must be the dup key
+        assert_eq!(Cmp::<{ T }>::cmp_full(lb, at!(0), s.rid_off()), Ordering::Equal);
+      }
+      if !ub.is_null() {
+        assert_eq!(Cmp::<{ T }>::cmp_full(at!(ip.count as usize - 1), ub, s.rid_off()), Ordering::Less);
+      }
+      if !ip.leaf {
+        for i in 0..ip.count as usize {
+          let ub = if i + 1 == ip.count as usize { ub } else { at!(i + 1) };
+          dfs(s, at_ch!(i), at!(i), ub);
+        }
       }
     }
+    dfs(self, self.root(), ptr::null(), ptr::null());
+  }
+
+  #[cfg(feature = "print-dot")]
+  pub unsafe fn print_dot(&self) -> String {
+    use std::fmt::Write;
+    unsafe fn dfs<const T: BareTy>(s: &Index<{ T }>, page: u32, id: &mut u32, dot: &mut String) -> u32 {
+      let my_id = (*id, *id += 1).0;
+      let _ = write!(dot, "n{}[label=\"", my_id);
+      let ip = s.pr().db().get_page::<IndexPage>(page);
+      let db = s.pr().db();
+      let (slot_size, key_size) = (ip.slot_size() as usize, ip.key_size() as usize);
+      macro_rules! at { ($pos: expr) => { ip.data.as_mut_ptr().add($pos * slot_size) }; }
+      macro_rules! at_ch { ($pos: expr) => { *(ip.data.as_mut_ptr().add($pos * slot_size + key_size) as *mut u32) }; }
+      let rid_off = s.rid_off();
+      let ty = ColTy::FixTy(FixTy { ty: T, size: 0 });
+      for i in 0..ip.count as usize {
+        let rid = *(at!(i).add(rid_off) as *const Rid);
+        let _ = write!(dot, "<f{}> {:?}\\n{}, {}|", i, db.ptr2lit(at!(i), ty), rid.page(), rid.slot());
+      }
+      dot.pop();
+      let _ = writeln!(dot, "\"]");
+      if !ip.leaf {
+        for i in 0..ip.count as usize {
+          let ch_id = dfs(s, at_ch!(i), id, dot);
+          let _ = writeln!(dot, "n{}:f{} -> n{}", my_id, i, ch_id);
+        }
+      }
+      my_id
+    }
+    let mut dot = "digraph {\nnode [shape=record]\n".to_owned();
+    dfs(self, self.root(), &mut 0, &mut dot);
+    dot.push('}');
+    dot
   }
 }
 
