@@ -1,44 +1,144 @@
 use std::{fs::{File, OpenOptions}, path::Path};
 use memmap::{MmapOptions, MmapMut};
 use unchecked_unwrap::UncheckedUnwrap;
+use chrono::NaiveDate;
 
 use physics::*;
-use common::{*, Error::*};
+use common::{*, Error::*, BareTy::*};
 use syntax::ast::*;
-use crate::fill_ptr;
 
 pub struct Db {
   pub(crate) mmap: MmapMut,
-  pub(crate) pages: u32,
   pub(crate) file: File,
-  pub(crate) path: String,
+  pub(crate) lob_mmap: MmapMut,
+  pub(crate) lob_file: File,
+  pub(crate) pages: u32,
+  pub(crate) lob_slots: u32,
 }
 
 impl Db {
   pub fn create<'a>(path: impl AsRef<Path>) -> Result<'a, Db> {
     unsafe {
-      let file = OpenOptions::new().read(true).write(true).create(true).append(true).open(path.as_ref())?;
+      let opt = OpenOptions::new().read(true).write(true).create(true).append(true).clone();
+      let file = opt.open(path.as_ref())?;
       file.set_len(PAGE_SIZE as u64)?;
       // this is 64G, the maximum capacity of this db; mmap will not allocate memory unless accessed
       let mut mmap = MmapOptions::new().len(PAGE_SIZE * MAX_PAGE).map_mut(&file)?;
       (mmap.as_mut_ptr() as *mut DbPage).r().init();
-      Ok(Db { mmap, pages: 1, file, path: path.as_ref().to_string_lossy().into_owned() })
+      let lob_file = opt.open(path.as_ref().with_extension(LOB_SUFFIX))?;
+      lob_file.set_len(LOB_SLOT_SIZE as u64)?;
+      // lob file can use all the 32 bits addr space, each addr for 32 bytes, in all 128G
+      let mut lob_mmap = MmapOptions::new().len(!0u32 as usize * LOB_SLOT_SIZE).map_mut(&lob_file)?;
+      (lob_mmap.as_mut_ptr() as *mut FreeLobSlot).r().init_nil();
+      Ok(Db { mmap, file, lob_mmap, lob_file, pages: 1, lob_slots: 1 })
     }
   }
 
   pub fn open<'a>(path: impl AsRef<Path>) -> Result<'a, Db> {
     unsafe {
-      let file = OpenOptions::new().read(true).write(true).append(true).open(path.as_ref())?;
+      let opt = OpenOptions::new().read(true).write(true).append(true).clone();
+      let file = opt.open(path.as_ref())?;
       let size = file.metadata()?.len() as usize;
-      if size == 0 || size % PAGE_SIZE != 0 { return Err(InvalidSize(size)); }
-      let mut mmap = MmapOptions::new().len(PAGE_SIZE * MAX_PAGE).map_mut(&file)?;
-      let dp = (mmap.as_mut_ptr() as *mut DbPage).r();
+      if size == 0 || size % PAGE_SIZE != 0 { return Err(InvalidSize { size, expect_multiply_of: PAGE_SIZE }); }
+      let mmap = MmapOptions::new().len(PAGE_SIZE * MAX_PAGE).map_mut(&file)?;
+      let dp = &*(mmap.as_ptr() as *const DbPage);
       if &dp.magic != MAGIC { return Err(InvalidMagic(dp.magic)); }
-      Ok(Db { mmap, pages: (size / PAGE_SIZE) as u32, file, path: path.as_ref().to_string_lossy().into_owned() })
+      let lob_file = opt.open(path.as_ref().with_extension(LOB_SUFFIX))?;
+      let lob_size = lob_file.metadata()?.len() as usize;
+      if lob_size == 0 || lob_size % LOB_SLOT_SIZE != 0 { return Err(InvalidSize { size: lob_size, expect_multiply_of: LOB_SLOT_SIZE }); }
+      let lob_mmap = MmapOptions::new().len(!0u32 as usize * LOB_SLOT_SIZE).map_mut(&lob_file)?;
+      Ok(Db { mmap, file, lob_file, lob_mmap, pages: (size / PAGE_SIZE) as u32, lob_slots: (lob_size / LOB_SLOT_SIZE) as u32 })
+    }
+  }
+}
+
+impl Db {
+  // like `lit2ptr`, but only do type check
+  pub fn lit2ptr_ck(ty: FixTy, val: CLit) -> Result<()> {
+    match (ty.ty, val.lit()) {
+      (Bool, Lit::Bool(_)) => Ok(()),
+      (Int, Lit::Number(_)) => Ok(()),
+      (Float, Lit::Number(_)) => Ok(()),
+      (Date, Lit::Str(v)) => (crate::date(v)?, Ok(())).1,
+      (Date, Lit::Date(_)) => Ok(()),
+      (Char, Lit::Str(v)) if v.len() <= ty.size as usize => Ok(()),
+      _ => Err(ColLitMismatch { ty: ColTy::FixTy(ty), val }),
     }
   }
 
-  pub fn path(&self) -> &str { &self.path }
+  // ignore non-varchar case
+  pub fn varchar_ck(ty: ColTy, val: CLit) -> Result<()> {
+    match (ty, val.lit()) {
+      (varchar!(size), Lit::Str(v)) if v.len() <= size as usize => Ok(()),
+      (varchar!(), _) => Err(ColLitMismatch { ty, val }),
+      _ => Ok(())
+    }
+  }
+
+  // `ptr` points to the location in this record where `val` should locate, not the start address of data slot
+  // if `val` is null, it is always regarded as illegal
+  // Varchar case is not handled here, use `lit2varchar` to write varchar to ptr
+  pub unsafe fn lit2ptr<'a>(&mut self, ptr: *mut u8, ty: FixTy, val: CLit<'a>) -> Result<'a, ()> {
+    Ok(match (ty.ty, val.lit()) {
+      (Bool, Lit::Bool(v)) => *(ptr as *mut bool) = v,
+      (Int, Lit::Number(v)) => *(ptr as *mut i32) = v as i32,
+      (Float, Lit::Number(v)) => *(ptr as *mut f32) = v as f32,
+      (Date, Lit::Str(v)) => *(ptr as *mut NaiveDate) = crate::date(v)?,
+      (Date, Lit::Date(v)) => *(ptr as *mut NaiveDate) = v, // it is not likely to enter this case, because parser cannot produce Date
+      (Char, Lit::Str(v)) if v.len() <= ty.size as usize => {
+        *ptr = v.len() as u8;
+        ptr.add(1).copy_from_nonoverlapping(v.as_ptr(), v.len());
+      }
+      _ => return Err(ColLitMismatch { ty: ColTy::FixTy(ty), val })
+    })
+  }
+
+  // if `ptr`'s content doesn't have initial value (e.g.: insert), set initialized = false, otherwise set initialized = true; this helps handling varchar
+  pub unsafe fn lit2varchar(&mut self, ptr: *mut u8, s: &str, initialized: bool) {
+    let write_varchar = |db: &mut Db| {
+      let (lob_id, cap, ptr1) = db.alloc_lob(s.len() as u32);
+      ptr1.copy_from_nonoverlapping(s.as_ptr(), s.len());
+      *(ptr as *mut VarcharSlot) = VarcharSlot { lob_id, len: s.len() as u16, cap: cap as u16 };
+    };
+    if initialized {
+      let old = (ptr as *mut VarcharSlot).r();
+      if s.len() <= old.cap as usize {
+        old.len = s.len() as u16;
+        self.get_lob(old.lob_id).copy_from_nonoverlapping(s.as_ptr(), s.len());
+      } else {
+        self.dealloc_lob(old.lob_id, old.cap as u32);
+        write_varchar(self);
+      }
+    } else { write_varchar(self); }
+  }
+
+  // input the whole data slot, result may be null
+  pub unsafe fn data2lit<'a>(&self, data: *const u8, ci_id: u32, ci: &ColInfo) -> CLit<'a> {
+    if bsget(data as *const u32, ci_id as usize) { return CLit::new(Lit::Null); };
+    self.ptr2lit(data.add(ci.off as usize), ci.ty)
+  }
+
+  // input the data ptr, result is never null
+  pub unsafe fn ptr2lit<'a>(&self, ptr: *const u8, ty: ColTy) -> CLit<'a> {
+    CLit::new(match ty {
+      bool!() => Lit::Bool(*(ptr as *const bool)),
+      int!() => Lit::Number(*(ptr as *const i32) as f64),
+      float!() => Lit::Number(*(ptr as *const f32) as f64),
+      date!() => Lit::Date(*(ptr as *const NaiveDate)),
+      char!() => Lit::Str(str_from_db(ptr)),
+      varchar!() => Lit::Str(self.varchar(ptr)),
+    })
+  }
+
+  pub unsafe fn varchar<'a>(&self, ptr: *const u8) -> &'a str {
+    let v = (ptr as *const VarcharSlot).r();
+    str_from_parts(self.pr().get_lob(v.lob_id), v.len as usize)
+  }
+
+  pub unsafe fn free_varchar(&mut self, ptr: *const u8) {
+    let v = (ptr as *const VarcharSlot).r();
+    self.dealloc_lob(v.lob_id, v.cap as u32);
+  }
 }
 
 impl Db {
@@ -66,41 +166,45 @@ impl Db {
       for cons in &c.cons {
         match cons {
           ColCons::Primary(cols1) => for col in cols1 {
-            let (_, _, has_pfuc) = if let Some(x) = cols.get_full_mut(col) { x } else { return Err(NoSuchCol(col)); };
+            let (idx, _, has_pfuc) = if let Some(x) = cols.get_full_mut(col) { x } else { return Err(NoSuchCol(col)); };
             if (has_pfuc.0, has_pfuc.0 = true).0 { return Err(DupConstraint(col)); }
+            if c.cols.get_unchecked(idx).ty.is_varchar() { return Err(UnsupportedVarcharOp(col)); }
             primary_cnt += 1;
           }
           ColCons::Foreign { col, f_table, f_col } => {
             let (idx, _, has_pfuc) = if let Some(x) = cols.get_full_mut(col) { x } else { return Err(NoSuchCol(col)); };
             if (has_pfuc.1, has_pfuc.1 = true).0 { return Err(DupConstraint(col)); }
+            let cd = c.cols.get_unchecked(idx);
             let f_tp = self.get_tp(f_table)?.1;
             let f_ci = f_tp.get_ci(f_col)?;
             if !f_ci.unique(f_tp.primary_cols().count()) { return Err(ForeignOnNotUnique(f_col)); }
-            let (foreign, own) = (f_ci.ty, c.cols.get_unchecked(idx).ty);
-            if foreign != own { return Err(IncompatibleForeignTy { foreign, own }); };
+            debug_assert!(!f_ci.ty.is_varchar());
+            if f_ci.ty != cd.ty { return Err(IncompatibleForeignTy { foreign: f_ci.ty, own: cd.ty }); }
           }
           ColCons::Unique(col) => {
-            let (_, _, has_pfuc) = if let Some(x) = cols.get_full_mut(col) { x } else { return Err(NoSuchCol(col)); };
+            let (idx, _, has_pfuc) = if let Some(x) = cols.get_full_mut(col) { x } else { return Err(NoSuchCol(col)); };
             if (has_pfuc.2, has_pfuc.2 = true).0 { return Err(DupConstraint(col)); }
+            if c.cols.get_unchecked(idx).ty.is_varchar() { return Err(UnsupportedVarcharOp(col)); }
           }
           ColCons::Check(col, check) => {
             let (idx, _, has_pfuc) = if let Some(x) = cols.get_full_mut(col) { x } else { return Err(NoSuchCol(col)); };
             if (has_pfuc.3, has_pfuc.3 = true).0 { return Err(DupConstraint(col)); }
             let cd = c.cols.get_unchecked(idx);
+            if cd.ty.is_varchar() { return Err(UnsupportedVarcharOp(col)); }
             let sz = cd.ty.size() as usize;
             // default value will use one slot in check page
             if sz * (check.len() + (cd.dft.is_some() as usize)) > MAX_CHECK_BYTES { return Err(CheckTooLong(col)); }
-            let buf = Align4U8::new(sz); // dummy buffer, only for typeck
             for &c in check {
-              if c.is_null() { return Err(CheckNull(col)); } else { fill_ptr(buf.ptr, cd.ty, c)?; }
+              if c.is_null() { return Err(CheckNull(col)); } else { Db::lit2ptr_ck(cd.ty.fix_ty(), c)?; }
             }
           }
         }
       }
-      for col in &c.cols {
-        if let Some(dft) = col.dft {
-          // you can set default = null to a notnull col, such insertion will be rejected anyway
-          if !dft.is_null() { fill_ptr(Align4U8::new(col.ty.size() as usize).ptr, col.ty, dft)?; }
+      for cd in &c.cols {
+        if let Some(dft) = cd.dft {
+          if cd.ty.is_varchar() { return Err(UnsupportedVarcharOp(cd.col)); }
+          // you can set default = null to a notnull col, such insertion will be rejected though
+          if !dft.is_null() { Db::lit2ptr_ck(cd.ty.fix_ty(), dft)?; }
         }
       }
 
@@ -147,7 +251,7 @@ impl Db {
             cp.count = check.len() as u16;
             let sz = ci.ty.size() as usize;
             for (idx, &c) in check.iter().enumerate() {
-              fill_ptr(cp.data.as_mut_ptr().add(idx * sz), ci.ty, c).unchecked_unwrap();
+              self.lit2ptr(cp.data.as_mut_ptr().add(idx * sz), ci.ty.fix_ty(), c).unchecked_unwrap();
             }
           }
         }
@@ -162,7 +266,7 @@ impl Db {
               (cp.count = 0, cp).1
             } else { self.get_page::<CheckPage>(ci.check >> 1) };
             ci.check |= 1;
-            fill_ptr(cp.data.as_mut_ptr().add(cp.count as usize * ci.ty.size() as usize), ci.ty, dft).unchecked_unwrap();
+            self.lit2ptr(cp.data.as_mut_ptr().add(cp.count as usize * ci.ty.size() as usize), ci.ty.fix_ty(), dft).unchecked_unwrap();
           }
         }
       }
@@ -197,7 +301,7 @@ impl Db {
       dp.first_free = *self.get_page(free); // [0] stores next free(or none)
       free
     } else {
-      self.file.set_len((self.pages as u64 + 1) * PAGE_SIZE as u64).unwrap_or_else(|e| panic!("Failed to allocate page because {}. The database may already be in an invalid state.", e));
+      self.file.set_len((self.pages as u64 + 1) * PAGE_SIZE as u64).expect("Failed to allocate page. The database may already be in an invalid state.");
       (self.pages, self.pages += 1).0
     };
     (free, self.get_page(free))
@@ -205,6 +309,7 @@ impl Db {
 
   // add `page` to the head of free list
   pub unsafe fn dealloc_page(&mut self, page: u32) {
+    debug_assert!(page < self.pages);
     let dp = self.dp();
     *self.get_page::<u32>(page) = dp.first_free;
     dp.first_free = page;
@@ -219,7 +324,7 @@ impl Db {
     Err(NoSuchTable(table))
   }
 
-  pub unsafe fn allocate_data_slot(&mut self, tp_id: u32) -> Rid {
+  pub unsafe fn alloc_data_slot(&mut self, tp_id: u32) -> Rid {
     let tp = self.get_page::<TablePage>(tp_id);
     if tp.first_free == !0 {
       let (id, dp) = self.alloc_page::<DataPage>();

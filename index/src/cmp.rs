@@ -14,7 +14,7 @@ impl<const T: BareTy> Cmp<{ T }> {
       Int => (*(l as *const i32)).cmp(&*(r as *const i32)),
       Float => fcmp(*(l as *const f32), *(r as *const f32)),
       Date => (*(l as *const NaiveDate)).cmp(&*(r as *const NaiveDate)),
-      VarChar => str_from_db(l).cmp(str_from_db(r)),
+      Char => str_from_db(l).cmp(str_from_db(r)),
     }
   }
 

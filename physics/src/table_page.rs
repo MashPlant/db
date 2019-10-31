@@ -14,8 +14,6 @@ bitflags::bitflags! {
 #[repr(C)]
 pub struct ColInfo {
   pub ty: ColTy,
-  // offset in a record
-  pub off: u16,
   // index root page id, !0 for none
   pub index: u32,
   // `check >> 1` is check page id, `check == !0` for none
@@ -26,6 +24,8 @@ pub struct ColInfo {
   // index in TablePage::cols, if f_table == !0, f_col is meaningless
   pub f_col: u8,
   pub flags: ColFlags,
+  // offset in a record; this is an important field, placing it so behind is to avoid the space of padding
+  pub off: u16,
   // if `index == !0`, below 2 are meaningless
   // if `index != !0 && idx_name_len == 0`, it is an anonymous index (created by dbms, has no name)
   pub idx_name_len: u8,
@@ -79,8 +79,8 @@ pub struct TablePage {
 }
 
 pub const MAX_TABLE_NAME: usize = 46;
-pub const MAX_COL_NAME: usize = 27;
-pub const MAX_IDX_NAME: usize = 17;
+pub const MAX_COL_NAME: usize = 25;
+pub const MAX_IDX_NAME: usize = 15;
 pub const MAX_COL: usize = 127;
 
 impl TablePage {

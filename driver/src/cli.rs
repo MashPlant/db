@@ -22,7 +22,7 @@ impl Highlighter for SqlHelper {
       match token.ty {
         Lt | Le | Ge | Gt | Eq | Ne | LPar | RPar | Add | Sub | Mul | Div | Mod | Comma | Semicolon => {}
         Null | True | False | FloatLit | IntLit | StrLit => ret.replace_range(range, &piece.green().to_string()),
-        Int | Bool | VarChar | Float | Date => ret.replace_range(range, &piece.cyan().to_string()),
+        Int | Bool | Char | Varchar | Float | Date => ret.replace_range(range, &piece.cyan().to_string()),
         Sum | Avg | Min | Max | Count => ret.replace_range(range, &piece.yellow().to_string()),
         Id1 | Dot => ret.replace_range(range, &piece.purple().to_string()),
         _Err | _Eof => break ret.into(),

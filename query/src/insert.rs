@@ -5,7 +5,7 @@ use common::{*, BareTy::*, Error::*};
 use syntax::ast::*;
 use physics::*;
 use index::{Index, cmp::Cmp, handle_all};
-use db::{Db, is_null, fill_ptr, ptr2lit, hash_pks};
+use db::{Db, is_null, hash_pks};
 
 // update can also use this
 pub(crate) struct InsertCtx<'a> {
@@ -38,7 +38,7 @@ impl<'a> InsertCtx<'a> {
       if ci.check != !0 && ((ci.check & 1) == 1) {
         let cp = db.get_page::<CheckPage>(ci.check >> 1);
         let ptr = cp.data.as_ptr().add(cp.count as usize * ci.ty.size() as usize); // the one-past-last slot
-        *dfts.get_unchecked_mut(idx) = ptr2lit(ptr, ci.ty.ty);
+        *dfts.get_unchecked_mut(idx) = db.ptr2lit(ptr, ci.ty);
       }
     }
     Ok(InsertCtx { db: db.pr(), tp, tp_id, pks, pk_set, cols, dfts })
@@ -69,13 +69,13 @@ impl<'a> InsertCtx<'a> {
   unsafe fn insert(&mut self, buf: *mut u8, vals: &[CLit<'a>]) -> Result<'a, ()> {
     let vals = self.get_insert_val(vals)?;
     (buf as *mut u32).write_bytes(0, (vals.len() + 31) / 32); // clear null-bitset
-    for (idx, &val) in vals.iter().enumerate() {
-      let ci = self.tp.cols.get_unchecked(idx);
+    for (ci_id, &val) in vals.iter().enumerate() {
+      let ci = self.tp.cols.get_unchecked(ci_id);
       if val.is_null() {
         if ci.flags.intersects(ColFlags::NOTNULL1) { return Err(PutNullOnNotNull); }
-        bsset(buf as *mut u32, idx);
-      } else {
-        fill_ptr(buf.add(ci.off as usize), ci.ty, val)?;
+        bsset(buf as *mut u32, ci_id);
+      } else if !ci.ty.is_varchar() {
+        self.db.lit2ptr(buf.add(ci.off as usize), ci.ty.fix_ty(), val)?;
       }
     }
     for ci_id in 0..self.tp.col_num as u32 {
@@ -84,21 +84,32 @@ impl<'a> InsertCtx<'a> {
     if self.pks.len() > 1 {
       if !self.pk_set.insert(hash_pks(buf, &self.pks)) { return Err(PutDupOnPrimary); }
     }
+    // now fill varchar fields, unlike non-varchar fields:
+    // 1. they never affect the result of `check_col` and `pk_set`
+    // 2. if one varchar field is written, the whole insertion must succeed (otherwise need to deallocate the space, which is not handled currently)
+    for (ci_id, &val) in vals.iter().enumerate() {
+      if !val.is_null() { Db::varchar_ck(self.tp.cols.get_unchecked(ci_id).ty, val)?; }
+    }
     // now no error can occur
+    for (ci_id, &val) in vals.iter().enumerate() {
+      let ci = self.tp.cols.get_unchecked(ci_id);
+      if !val.is_null() && ci.ty.is_varchar() {
+        match val.lit() { Lit::Str(s) => self.db.lit2varchar(buf.add(ci.off as usize), s, false), _ => impossible!() }
+      }
+    }
     self.tp.count += 1;
-    let rid = self.db.allocate_data_slot(self.tp_id); // the `used` bit is set here, and `count` grows here
+    let rid = self.db.alloc_data_slot(self.tp_id); // the `used` bit is set here, and `count` grows here
     let (page, slot) = (rid.page(), rid.slot());
     let dp = self.db.get_page::<DataPage>(page);
     let size = self.tp.size as usize;
     dp.data.as_mut_ptr().add(slot as usize * size).copy_from_nonoverlapping(buf, size);
     // update index
     for (ci_id, ci) in self.tp.cols().iter().enumerate() {
-      if ci.index != !0 && !is_null(buf, ci_id as u32) {  // null item doesn't get inserted to index
+      let ci_id = ci_id as u32;
+      if ci.index != !0 && !is_null(buf, ci_id) {  // null item doesn't get inserted to index
         let ptr = buf.add(ci.off as usize);
-        macro_rules! handle {
-          ($ty: ident) => {{ Index::<{ $ty }>::new(self.db, self.tp_id, ci_id as u32).insert(ptr, rid); }};
-        }
-        handle_all!(ci.ty.ty, handle);
+        macro_rules! handle { ($ty: ident) => {{ Index::<{ $ty }>::new(self.db, self.tp_id, ci_id).insert(ptr, rid); }}; }
+        handle_all!(ci.ty.fix_ty().ty, handle);
       }
     }
     Ok(())
@@ -106,6 +117,7 @@ impl<'a> InsertCtx<'a> {
 
   // `rid` is used for unique check, if rid is Some && a rid `rid1` is found in Index && `rid1` is equal to `rid`, it is not regarded as a duplicate
   // the return value's life time can't come from `data`, because `data` are on the stack in all usage
+  // varchar fields never affect the result of `check_col`, so caller can first write non-varchar fields, then call `check_col`, then write varchar fields
   pub(crate) unsafe fn check_col(&mut self, data: *const u8, ci_id: u32, val: CLit<'a>, rid: Option<Rid>) -> Result<'a, ()> {
     // unique / foreign / `check` check, null item doesn't need them (null check is in `fill_buf`)
     if !is_null(data, ci_id) {
@@ -121,7 +133,7 @@ impl<'a> InsertCtx<'a> {
             }
           }};
         }
-        handle_all!(ci.ty.ty, handle);
+        handle_all!(ci.ty.fix_ty().ty, handle);
       }
       if ci.f_table != !0 {
         macro_rules! handle {
@@ -129,22 +141,16 @@ impl<'a> InsertCtx<'a> {
             if !Index::<{ $ty }>::new(self.db, ci.f_table, ci.f_col as u32).contains(ptr) { return Err(PutNonexistentForeign { col: ci.name(), val }); }
           }};
         }
-        handle_all!(ci.ty.ty, handle); // their type are exactly the same, so can use `ptr` directly to search in index, `create_table` guarantee this
+        handle_all!(ci.ty.fix_ty().ty, handle); // their type are exactly the same, so can use `ptr` directly to search in index, `create_table` guarantee this
       }
       if ci.check != !0 {
         let cp = self.db.get_page::<CheckPage>(ci.check >> 1);
-        if cp.count == 0 { return Ok(()); } // the check page only contains default value (actually no check)
         let sz = ci.ty.size() as usize;
-        macro_rules! handle {
-          ($ty: ident) => {{
-            for i in 0..cp.count as usize {
-              if Cmp::<{ $ty }>::cmp(ptr, cp.data.as_ptr().add(i * sz)) == Equal { return Ok(()); }
-            }
-          }};
+        macro_rules! handle { ($ty: ident) => {{ (0..cp.count as usize).all(|i| Cmp::<{ $ty }>::cmp(ptr, cp.data.as_ptr().add(i * sz)) != Equal) }}; }
+        // if cp.count == 0, the check page only contains default value (actually no check)
+        if cp.count != 0 && handle_all!(ci.ty.fix_ty().ty, handle) {
+          return Err(PutNotInCheck { col: ci.name(), val });
         }
-        handle_all!(ci.ty.ty, handle);
-        // the `return` in macro can prevent it
-        return Err(PutNotInCheck { col: ci.name(), val });
       }
     }
     Ok(())

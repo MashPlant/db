@@ -3,13 +3,13 @@ use unchecked_unwrap::UncheckedUnwrap;
 
 use common::*;
 use physics::*;
-use crate::{db::Db, ptr2lit};
+use crate::Db;
 
 pub fn show_db<'a>(path: impl AsRef<Path>, s: &mut String) -> Result<'a, ()> {
   unsafe {
     let mut db = Db::open(path)?;
-    let tables = db.dp().table_num;
-    writeln!(s, "database `{}`: page count = {}, table count = {}", db.path, db.pages, tables).unchecked_unwrap();
+    let table_num = db.dp().table_num;
+    writeln!(s, "database: page count = {}, lob slot count = {}, table count = {}", db.pages, db.lob_slots, table_num).unchecked_unwrap();
     Ok(())
   }
 }
@@ -61,12 +61,12 @@ impl Db {
         if count != 0 {
           *s += "    - check: ";
           for idx in 0..count {
-            write!(s, "{:?}, ", ptr2lit(cp.data.as_ptr().add(idx * size), ci.ty.ty)).unchecked_unwrap();
+            write!(s, "{:?}, ", self.ptr2lit(cp.data.as_ptr().add(idx * size), ci.ty)).unchecked_unwrap();
           }
           (s.pop(), s.pop(), s.push('\n'));
         }
         if (ci.check & 1) == 1 {
-          writeln!(s, "    - default: {:?}", ptr2lit(cp.data.as_ptr().add(count * size), ci.ty.ty)).unchecked_unwrap();
+          writeln!(s, "    - default: {:?}", self.ptr2lit(cp.data.as_ptr().add(count * size), ci.ty)).unchecked_unwrap();
         }
       }
     }

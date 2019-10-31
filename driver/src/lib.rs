@@ -1,4 +1,4 @@
-use std::{borrow::Cow, fs};
+use std::{borrow::Cow, fs, path::Path};
 use typed_arena::Arena;
 
 use common::{*, Error::*};
@@ -27,10 +27,7 @@ impl Eval {
       Select(s) => query::select(s, self.db()?)?.csv().into(),
       Update(u) => fmt(query::update(u, self.db()?)?),
       &CreateDb(path) => (Db::create(path), "".into()).1,
-      &DropDb(path) => {
-        if Some(path) == self.0.as_ref().map(|db| db.path()) { self.0 = None; }
-        (fs::remove_file(path)?, "".into()).1
-      }
+      &DropDb(path) => (fs::remove_file(path)?, fs::remove_file(AsRef::<Path>::as_ref(path).with_extension(LOB_SUFFIX))?, "".into()).2,
       &ShowDb(path) => {
         let mut s = String::new();
         (show_db(path, &mut s)?, s.into()).1
@@ -45,7 +42,7 @@ impl Eval {
       }
       &UseDb(path) => (self.0 = Some(Db::open(path)?), "".into()).1,
       CreateTable(c) => (self.db()?.create_table(c)?, "".into()).1,
-      &DropTable(table) => (index::drop_table(self.db()?, table)?, "".into()).1,
+      &DropTable(table) => (self.db()?.drop_table(table)?, "".into()).1,
       &ShowTable(table) => self.db()?.show_table(table)?.into(),
       ShowTables => self.db()?.show_tables().into(),
       CreateIndex(c) => (index::create_index(self.db()?, c)?, "".into()).1,

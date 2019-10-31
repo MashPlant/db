@@ -1,8 +1,6 @@
 use typed_arena::Arena;
 
 use driver::Eval;
-use physics::*;
-use common::{*, BareTy::*};
 
 // format! input stmts to cover related code
 macro_rules! ok { ($e: expr, $sql: expr) => { $e.exec_all($sql, &Arena::default(), |x| { let _ = format!("{:?}", x); }, |_| {}).unwrap(); }; }
@@ -49,20 +47,35 @@ fn select() {
   ok!(e, "select count(name) from test; -- 2");
   ok!(e, "drop table test;");
 
-  ok!(e, "create table t1 (f float, d date, s varchar(10)); create table t2 (s varchar(5), f float, d date);");
+  ok!(e, "create table t1 (f float, d date, s char(10)); create table t2 (s char(5), f float, d date);");
   ok!(e, "insert into t1 values (1, '2019-01-01', '1'), (3, '2019-01-03', '3'), (5, '2019-01-05', '5'), (7, '2019-01-07', '7');");
   ok!(e, "insert into t2 values ('2', 2, '2019-01-02'), ('4', 4, '2019-01-04'), ('6', 6, '2019-01-06'), ('8', 8, '2019-01-08');");
   ok!(e, "select * from t1, t2 where t1.f < t2.f; select * from t1, t2 where t2.s > t1.s; select * from t1, t2 where t2.d > t1.d;");
   ok!(e, "select * from t2, t1 where t1.f < t2.f; select * from t2, t1 where t2.s > t1.s; select * from t2, t1 where t2.d > t1.d;");
   ok!(e, "select * from t1, t2 where t1.f <> t2.f and t1.s <> t2.s; -- equivalent to no condition");
   ok!(e, "drop table t1; drop table t2;");
+
+  ok!(e, "create table t1 (f float, d date, s varchar(10)); create table t2 (s varchar(5), f float, d date); -- like above, but use varchar, some optimization may fail");
+  ok!(e, "insert into t1 values (1, '2019-01-01', '1'), (3, '2019-01-03', '3'), (5, '2019-01-05', '5'), (7, '2019-01-07', '7');");
+  ok!(e, "insert into t2 values ('2', 2, '2019-01-02'), ('4', 4, '2019-01-04'), ('6', 6, '2019-01-06'), ('8', 8, '2019-01-08');");
+  ok!(e, "select * from t1, t2 where t1.f < t2.f; select * from t1, t2 where t2.s > t1.s; select * from t1, t2 where t2.d > t1.d;");
+  ok!(e, "select * from t2, t1 where t1.f < t2.f; select * from t2, t1 where t2.s > t1.s; select * from t2, t1 where t2.d > t1.d;");
+  ok!(e, "select * from t1, t2 where t1.f <> t2.f and t1.s <> t2.s; -- equivalent to no condition");
+  ok!(e, "drop table t1; drop table t2;");
+
+  ok!(e, "create table test (c char(10), v1 varchar(20), v2 varchar(30));");
+  ok!(e, "insert into test values ('hello', 'hello', 'world');");
+  ok!(e, "insert into test values ('world', 'hello', 'hello');");
+  ok!(e, "select * from test where c = v1 and v1 = c;");
+  ok!(e, "select * from test where v1 = v2;");
+  ok!(e, "drop table test;");
 }
 
 fn insert() {
   let mut e = Eval::default();
   ok!(e, "use orderDB;");
 
-  ok!(e, "create table test (i int, b bool default true, f float default 233, v varchar(10) default 'world', d date, check (v in ('hello', 'world')));");
+  ok!(e, "create table test (i int, b bool default true, f float default 233, v char(10) default 'world', d date, check (v in ('hello', 'world')));");
   ok!(e, "desc test;");
 
   err!(e, "insert into test (v) values ('foo'); -- error, not in check");
@@ -96,7 +109,7 @@ fn update() {
 
   ok!(e, "update LINEITEM set L_LINENUMBER = L_LINENUMBER + 1 - 2 * 3 / 4 % 5 - 1000000; -- note that / is fdiv, % is fmod");
 
-  ok!(e, "create table test(i int, v varchar(10), b bool, primary key (v, b), unique(i));");
+  ok!(e, "create table test(i int, v char(10), b bool, primary key (v, b), unique(i));");
   ok!(e, "insert into test values (1, 'hello', true);");
   ok!(e, "update test set b = i < 0 and v like 'he_lo';");
   ok!(e, "update test set b = i < 0 or v like 'he_lo';");
@@ -104,6 +117,18 @@ fn update() {
   ok!(e, "insert into test values (2, 'hello', false);");
   err!(e, "update test set i = 1 where i = 2; -- error, dup i");
   err!(e, "update test set b = true where i = 2; -- error, dup composite primary key");
+  ok!(e, "drop table test;");
+
+  ok!(e, "create table test (v1 varchar(2) not null, v2 varchar(2));");
+  ok!(e, "insert into test values ('v1', 'v2');");
+
+  err!(e, "update test set v1 = 'long', v2 = 'v2'; -- error, and `lit2varchar` should never be called, belows are the same");
+  err!(e, "update test set v1 = 'v1', v2 = 'long'; -- error");
+  err!(e, "update test set v1 = 'v1', v2 = 233; -- error");
+  err!(e, "update test set v1 = 233, v2 = 'v2'; -- error");
+  err!(e, "update test set v1 = null, v2 = 'long'; -- error, and `free_varchar` should never be called");
+  ok!(e, "update test set v1 = 'v2', v2 = null;");
+  ok!(e, "select * from test;");
   ok!(e, "drop table test;");
 }
 
@@ -125,10 +150,10 @@ fn alter() {
   let mut e = Eval::default();
   ok!(e, "use orderDB;");
 
-  ok!(e, "select sum(PS_PARTKEY), sum(PS_SUPPLYCOST) from PARTSUPP;");
-  ok!(e, "alter table PARTSUPP drop PS_AVAILQTY;");
-  ok!(e, "alter table PARTSUPP add foo varchar(10) not null default 'foo';");
-  ok!(e, "select sum(PS_PARTKEY), sum(PS_SUPPLYCOST) from PARTSUPP;");
+  ok!(e, "select sum(C_CUSTKEY), sum(C_ACCTBAL) from CUSTOMER;");
+  ok!(e, "alter table CUSTOMER drop C_ADDRESS;");
+  ok!(e, "alter table CUSTOMER add foo char(10) not null default 'foo';");
+  ok!(e, "select sum(C_CUSTKEY), sum(C_ACCTBAL) from CUSTOMER;");
 
   ok!(e, "create table test (i int, v varchar(10));");
 
@@ -175,16 +200,29 @@ fn errors() {
   err!(e, "show database OrderDB; -- error");
   err!(e, "use OrderDB; -- error");
   ok!(e, "use orderDB;");
-  err!(e, "create table CUSTOMER(id INT(10) NOT NULL); -- error, duplicate");
-  err!(e, "create table t (id INT, id INT); -- error, duplicate");
-  err!(e, "create table t (id INT(256) NOT NULL); -- error, u8 overflow");
-  ok!(e, "create table t (id INT(255) NOT NULL);");
+  err!(e, "create table CUSTOMER(id int(10) not null); -- error, duplicate");
+  err!(e, "create table t (id int, id int); -- error, duplicate");
+  err!(e, "create table t (id int(256) not null); -- error, u8 overflow");
+  ok!(e, "create table t (id int(255) not null);");
   err!(e, "insert into t value (2147483648); -- error, i32 overflow");
   err!(e, "insert into t values (null); -- error");
-  err!(e, "create table t1 (id INT(255), CHECK (id IN ('F', 'M'))); -- error, check ty mismatch");
+  err!(e, "create table t1 (id int(255), CHECK (id IN ('F', 'M'))); -- error, check ty mismatch");
   ok!(e, "create table t1 (id DATE, CHECK (id IN ('2019-01-01')));");
   err!(e, "select id from t, t1; -- error, ambiguous col");
   err!(e, "drop table t2; -- error, no such table");
+  ok!(e, "drop table t;");
+  ok!(e, "drop table t1;");
+
+  err!(e, "create table t (v varchar(10), unique(v)); -- error, unsupported varchar op");
+  err!(e, "create table t (v varchar(10), primary key (v)); -- error");
+  err!(e, "create table t (v varchar(10) default ''); -- error");
+  err!(e, "create table t (v varchar(10), check (v in (''))); -- error");
+  ok!(e, "create table t (v varchar(10));");
+  err!(e, "alter table t add index test_v_idx on(v); -- error");
+  err!(e, "alter table t add primary key (v); -- error");
+  err!(e, "create table t1 (v varchar(10), foreign key (v) references t(v)); -- error");
+  ok!(e, "create table t1 (v varchar(10));");
+  err!(e, "alter table t1 add foreign key (v) references t(v); -- error");
   ok!(e, "drop table t;");
   ok!(e, "drop table t1;");
 }

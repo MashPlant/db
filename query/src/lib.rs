@@ -12,7 +12,7 @@ mod filter;
 
 pub use crate::{insert::*, delete::*, select::*, update::*};
 
-use db::{Db, is_null, ptr2lit};
+use db::{Db, is_null};
 use physics::*;
 use index::{Index, handle_all};
 use common::{*, Error::*, BareTy::*};
@@ -26,11 +26,11 @@ unsafe fn check_foreign_link<'a>(db: &Db, tp: &TablePage, data: *const u8, f_lin
     macro_rules! handle {
       ($ty: ident) => {{
         if !is_null(data, ci_id as u32) && Index::<{ $ty }>::new(db, tp_id1, ci_id1 as u32).contains(ptr) {
-          return Err(ModifyColWithForeignLink { col: ci.name(), val: ptr2lit(ptr, $ty) });
+          return Err(ModifyColWithForeignLink { col: ci.name(), val: db.ptr2lit(ptr, ci.ty) });
         }
       }};
     }
-    handle_all!(ci.ty.ty, handle);
+    handle_all!(ci.ty.fix_ty().ty, handle);
   }
   Ok(())
 }

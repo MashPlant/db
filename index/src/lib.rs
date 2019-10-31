@@ -213,12 +213,12 @@ impl<const T: BareTy> Index<{ T }> {
 }
 
 #[macro_use]
-pub(crate) mod macros {
+mod macros {
   // handle all kinds of Index with regard to different types
   #[macro_export]
   macro_rules! handle_all {
     ($ty: expr, $handle: ident) => {
-      match $ty { Bool => $handle!(Bool), Int => $handle!(Int), Float => $handle!(Float), VarChar => $handle!(VarChar), Date => $handle!(Date) }
+      match $ty { Bool => $handle!(Bool), Int => $handle!(Int), Float => $handle!(Float), Char => $handle!(Char), Date => $handle!(Date) }
     };
   }
 }

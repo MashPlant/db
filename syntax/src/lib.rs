@@ -17,7 +17,7 @@ pub fn work<'a>(code: &'a str, alloc: &'a Arena<u8>) -> Result<Vec<Stmt<'a>>, Er
     Ok(ss) if p.pe.is_empty() => Ok(ss),
     Err(t) => {
       match t.ty {
-        TokenKind::_Err => p.pe.push(PE { line: t.line, col: t.col, kind: UnrecognizedChar(t.piece[0] as char) }),
+        TokenKind::_Err => p.pe.push(PE { line: t.line, col: t.col, kind: UnexpectedChar(t.piece[0] as char) }),
         _ => p.pe.push(PE { line: t.line, col: t.col, kind: SyntaxError }),
       }
       Err(Error::ParserErrors(p.pe.into()))

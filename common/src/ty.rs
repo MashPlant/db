@@ -1,34 +1,50 @@
 use std::{fmt, cmp::Ordering, mem, marker::PhantomData};
 use chrono::NaiveDate;
-use crate::debug_unreachable;
+use crate::{impossible, varchar, VARCHAR_SLOT_SIZE};
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum BareTy { Bool, Int, Float, Date, VarChar }
+pub enum BareTy { Bool, Int, Float, Date, Char }
 
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq)]
-pub struct ColTy {
+pub struct FixTy {
   pub ty: BareTy,
   pub size: u8,
 }
 
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ColTy { FixTy(FixTy), Varchar(u16) }
+
 impl ColTy {
   #[cfg_attr(tarpaulin, skip)]
   fn _ck() {
-    assert_eq_size!(ColTy, u16);
-    assert_eq_size!(chrono::NaiveDate, u32);
+    assert_eq_size!(FixTy, u16);
+    assert_eq_size!(ColTy, u32);
+    assert_eq_size!(NaiveDate, u32);
   }
+
+  pub fn is_varchar(self) -> bool { match self { ColTy::FixTy(_) => false, varchar!() => true } }
+
+  // guarantee: !self.is_varchar() <=> self.fix_ty() is safe
+  pub unsafe fn fix_ty(self) -> FixTy { match self { ColTy::FixTy(x) => x, varchar!() => impossible!() } }
 
   // char and varchar can have size = 255 + 1, so u16 is necessary
   pub fn size(self) -> u16 {
     use BareTy::*;
-    match self.ty { Bool => 1, Int | Float => 4, Date => 4, VarChar => self.size as u16 + 1 }
+    match self {
+      ColTy::FixTy(ty) => match ty.ty { Bool => 1, Int | Float => 4, Date => 4, Char => ty.size as u16 + 1 }
+      varchar!() => VARCHAR_SLOT_SIZE as u16,
+    }
   }
 
   pub fn align4(self) -> bool {
     use BareTy::*;
-    match self.ty { Bool | VarChar => false, Int | Float | Date => true }
+    match self {
+      ColTy::FixTy(ty) => match ty.ty { Bool | Char => false, Int | Float | Date => true }
+      varchar!() => true,
+    }
   }
 }
 
@@ -56,7 +72,7 @@ impl Lit<'_> {
       (&Lit::Number(l), &Lit::Number(r)) => fcmp(l, r),
       (Lit::Date(l), Lit::Date(r)) => l.cmp(r),
       (Lit::Str(l), Lit::Str(r)) => l.cmp(r),
-      _ => debug_unreachable!(),
+      _ => impossible!(),
     }
   }
 }
@@ -67,7 +83,7 @@ pub fn fcmp<T: PartialOrd>(l: T, r: T) -> Ordering {
   if l < r { Ordering::Less } else if l > r { Ordering::Greater } else { Ordering::Equal }
 }
 
-impl fmt::Debug for ColTy {
+impl fmt::Debug for FixTy {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{:?}({})", self.ty, self.size) }
 }
 
@@ -82,10 +98,9 @@ impl fmt::Debug for Lit<'_> {
 }
 
 // C for Compressed: Lit takes 24 bytes of space, which is not efficient enough
-// Lit is used in functions, CLit is used in data structures
+// Lit is used in functions to implement logic, CLit is used in data structures to save space
 #[derive(Copy, Clone)]
-#[repr(transparent)]
-pub struct CLit<'a>((u64, u64, PhantomData<&'a str>));
+pub struct CLit<'a>(u64, u64, PhantomData<&'a str>);
 
 impl<'a> CLit<'a> {
   // I don't expect it to work on a 32-bit system
@@ -95,29 +110,28 @@ impl<'a> CLit<'a> {
   pub fn new(lit: Lit<'a>) -> Self {
     unsafe {
       match lit {
-        Lit::Null => Self((0, 0, PhantomData)),
-        Lit::Bool(x) => Self((1, x as u64, PhantomData)),
-        Lit::Number(x) => Self((2, mem::transmute(x), PhantomData)),
-        Lit::Date(x) => Self((3, mem::transmute::<_, u32>(x) as u64, PhantomData)),
-        Lit::Str(x) => Self(mem::transmute(x)),
+        Lit::Null => Self(0, 0, PhantomData),
+        Lit::Bool(x) => Self(1, x as u64, PhantomData),
+        Lit::Number(x) => Self(2, mem::transmute(x), PhantomData),
+        Lit::Date(x) => Self(3, mem::transmute::<_, u32>(x) as u64, PhantomData),
+        Lit::Str(x) => mem::transmute(x),
       }
     }
   }
 
   pub fn lit(self) -> Lit<'a> {
     unsafe {
-      let data = self.0;
-      match data.0 {
+      match self.0 {
         0 => Lit::Null,
-        1 => Lit::Bool(data.1 != 0),
-        2 => Lit::Number(mem::transmute(data.1)),
-        3 => Lit::Date(mem::transmute(data.1 as u32)),
-        _ => Lit::Str(mem::transmute(data))
+        1 => Lit::Bool(self.1 != 0),
+        2 => Lit::Number(mem::transmute(self.1)),
+        3 => Lit::Date(mem::transmute(self.1 as u32)),
+        _ => Lit::Str(mem::transmute(self))
       }
     }
   }
 
-  pub fn is_null(self) -> bool { (self.0).0 == 0 }
+  pub fn is_null(self) -> bool { self.0 == 0 }
 
   pub unsafe fn cmp(self, other: CLit) -> Ordering { self.lit().cmp(&other.lit()) }
 }

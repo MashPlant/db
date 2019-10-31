@@ -1,6 +1,6 @@
 use std::{io, result, fmt};
 
-use crate::{MAGIC_LEN, ColTy, BareTy, LitTy, CLit, AggOp, BinOp, CmpOp};
+use crate::{MAGIC_LEN, ColTy, LitTy, CLit, AggOp, BinOp, CmpOp};
 
 #[derive(Debug)]
 pub struct ParserError<'a> {
@@ -12,8 +12,8 @@ pub struct ParserError<'a> {
 #[derive(Debug)]
 pub enum ParserErrorKind<'a> {
   SyntaxError,
-  UnrecognizedChar(char),
-  TypeSizeTooLarge(&'a str),
+  UnexpectedChar(char),
+  InvalidTypeSize(&'a str),
   InvalidInt(&'a str),
   InvalidFloat(&'a str),
 }
@@ -21,7 +21,7 @@ pub enum ParserErrorKind<'a> {
 #[derive(Debug)]
 pub enum Error<'a> {
   ParserErrors(Box<[ParserError<'a>]>),
-  InvalidSize(usize),
+  InvalidSize { size: usize, expect_multiply_of: usize },
   InvalidMagic([u8; MAGIC_LEN]),
   NoDbInUse,
   TableExhausted,
@@ -49,16 +49,16 @@ pub enum Error<'a> {
   ModifyColWithForeignLink { col: &'a str, val: CLit<'a> },
   InvalidDate { date: &'a str, reason: chrono::ParseError },
   InvalidLike { like: &'a str, reason: Box<regex::Error> },
-  InvalidLikeTy(BareTy),
+  InvalidLikeTy(ColTy),
   InvalidLikeTy1(LitTy),
+  // some operation on Varchar is not supported, e.g., create index (thus primary/foreign/unique are not supported, either)
+  UnsupportedVarcharOp(&'a str),
   // require them to be exactly the same (including BareTy and size, in order to search each other in index page)
   IncompatibleForeignTy { foreign: ColTy, own: ColTy },
-  RecordTyMismatch { expect: BareTy, actual: BareTy },
-  RecordLitTyMismatch { expect: BareTy, actual: LitTy },
+  ColMismatch { l: ColTy, r: ColTy },
+  ColLitMismatch { ty: ColTy, val: CLit<'a> },
   // e.g.: insert (1, 2) into (int)
   InsertTooLong { max: usize, actual: usize },
-  // Put stands for Insert or Update
-  PutStrTooLong { limit: u8, actual: usize },
   PutNullOnNotNull,
   PutDupOnUnique { col: &'a str, val: CLit<'a> },
   PutNonexistentForeign { col: &'a str, val: CLit<'a> },
@@ -73,8 +73,6 @@ pub enum Error<'a> {
   InvalidAgg { col: ColTy, op: AggOp },
   // select agg col together with non-agg col
   MixedSelect,
-  Div0,
-  Mod0,
   IncompatibleBin { op: BinOp, ty: LitTy },
   IncompatibleCmp { op: CmpOp, l: LitTy, r: LitTy },
   IncompatibleLogic(LitTy),

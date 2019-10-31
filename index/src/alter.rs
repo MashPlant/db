@@ -1,7 +1,7 @@
 use unchecked_unwrap::UncheckedUnwrap;
 
 use common::{*, Error::*, BareTy::*};
-use db::{Db, is_null, fill_ptr, ptr2lit, hash_pks};
+use db::{Db, is_null, hash_pks};
 use syntax::ast::*;
 use physics::*;
 use crate::{Index, handle_all};
@@ -20,30 +20,12 @@ pub fn create_index<'a>(db: &mut Db, c: &CreateIndex<'a>) -> Result<'a, ()> {
     }
     let (tp_id, tp) = db.get_tp(c.table)?;
     let ci = tp.get_ci(c.col)?;
+    if ci.ty.is_varchar() { return Err(UnsupportedVarcharOp(c.col)); }
     if ci.index == !0 {
       db.alloc_index(ci, c.index)?;
       insert_all(db, tp_id, tp, ci);
     }
     Ok(())
-  }
-}
-
-pub fn drop_table<'a>(db: &mut Db, table: &'a str) -> Result<'a, ()> {
-  unsafe {
-    let dp = db.dp();
-    for (idx, &tp_id) in dp.tables().iter().enumerate() {
-      let tp = db.get_page::<TablePage>(tp_id);
-      if tp.name() == table {
-        if db.foreign_links_to(tp_id).next().is_some() { return Err(ModifyTableWithForeignLink(table)); }
-        let tables = dp.tables.as_mut_ptr();
-        tables.add(idx).swap(tables.add(dp.table_num as usize - 1));
-        dp.table_num -= 1;
-        tp.cols().iter().filter(|ci| ci.index != !0).for_each(|ci| db.dealloc_index(ci.index));
-        drop_list(db, tp.first);
-        return Ok(());
-      }
-    }
-    Err(NoSuchTable(table))
   }
 }
 
@@ -57,19 +39,20 @@ pub fn add_foreign<'a>(db: &mut Db, a: &AddForeign<'a>) -> Result<'a, ()> {
     let f_ci = f_tp.get_ci(a.f_col)?;
     let f_ci_id = f_ci.idx(&f_tp.cols);
     if !f_ci.unique(f_tp.primary_cols().count()) { return Err(ForeignOnNotUnique(a.f_col)); }
-    if f_ci.ty != ci.ty { return Err(IncompatibleForeignTy { foreign: f_ci.ty, own: ci.ty }); };
+    debug_assert!(!f_ci.ty.is_varchar());
+    if f_ci.ty != ci.ty { return Err(IncompatibleForeignTy { foreign: f_ci.ty, own: ci.ty }); }
     macro_rules! handle {
       ($ty: ident) => {{
         let index = Index::<{ $ty }>::new(db, f_tp_id, f_ci_id);
         for (data, _) in db.record_iter(tp) {
           let ptr = data.add(ci.off as usize);
           if !is_null(data, ci_id) && !index.contains(ptr) {
-            return Err(PutNonexistentForeign { col: a.col, val: ptr2lit(ptr, $ty) });
+            return Err(PutNonexistentForeign { col: a.col, val: db.ptr2lit(ptr, ci.ty) });
           }
         }
       }};
     }
-    handle_all!(ci.ty.ty, handle);
+    handle_all!(ci.ty.fix_ty().ty, handle);
     // now no error can occur
     (ci.f_table = f_tp_id, ci.f_col = f_ci_id as u8);
     if ci.index == !0 {
@@ -90,6 +73,7 @@ pub fn add_primary<'a>(db: &mut Db, table: &'a str, cols: &[&'a str]) -> Result<
       if cols.iter().take(idx).any(|&x| x == col) { return Err(DupCol(col)); }
       let ci = tp.get_ci(col)?;
       if ci.flags.contains(ColFlags::PRIMARY) { return Err(DupConstraint(col)); }
+      if ci.ty.is_varchar() { return Err(UnsupportedVarcharOp(col)); }
       pks.push(ci);
     }
     for (data, _) in db.record_iter(tp) {
@@ -143,20 +127,19 @@ pub fn add_col<'a>(db: &mut Db, table: &'a str, col: &ColDecl<'a>) -> Result<'a,
     if tp.get_ci(col.col).is_ok() { return Err(DupCol(col.col)); }
     let dft = col.dft.unwrap_or(CLit::new(Lit::Null));
     let dft = if !dft.is_null() {
+      if col.ty.is_varchar() { return Err(UnsupportedVarcharOp(col.col)); }
       let buf = Align4U8::new(col.ty.size() as usize);
-      Some((fill_ptr(buf.ptr, col.ty, dft)?, buf).1)
-    } else if col.notnull && tp.count != 0 {
-      return Err(PutNullOnNotNull);
-    } else { None };
+      Some((db.lit2ptr(buf.ptr, col.ty.fix_ty(), dft)?, buf).1)
+    } else if col.notnull && tp.count != 0 { return Err(PutNullOnNotNull); } else { None };
     // basically copied from Db::create_table...
     let mut size = ((tp.col_num + 1) as usize + 31) / 32 * 4;
     for ci in tp.cols() { size += ci.ty.size() as usize; }
     size = (size + 3) & !3;
     if size > MAX_DATA_BYTE { return Err(ColSizeTooBig(size)); }
     // now no error can occur
-    let iter = db.record_iter(tp);
     let bs_size = ((tp.col_num as usize + 31) / 32 * 4, ((tp.col_num + 1) as usize + 31) / 32 * 4);
 
+    let iter = db.record_iter(tp);
     tp.cols.get_unchecked_mut(tp.col_num as usize).init(col.ty, 0, col.col, col.notnull); // `off` will be overwritten in `calc_size`
     tp.col_num += 1;
     calc_size(tp);
@@ -199,13 +182,20 @@ pub fn drop_col<'a>(db: &mut Db, table: &'a str, col: &'a str) -> Result<'a, ()>
       if !pks.is_empty() { check_dup(db, tp, &pks)?; }
     }
     // now no error can occur
-    let iter = db.record_iter(tp); // it will iterate over old data because necessary information is copied into iter
     let bs_size = ((col_num + 31) / 32 * 4, (col_num - 1 + 31) / 32 * 4);
     let l_size = ci.off as usize - bs_size.0;
     // the padding in right side may change, so need to copy data one by one; r_size_off is Vec<(size, old off, new off)>
     let mut r_size_off = tp.cols.get_unchecked(ci_id + 1..col_num).iter().map(|ci| (ci.ty.size(), ci.off, 0u16)).collect::<Vec<_>>();
 
     if ci.index != !0 { db.dealloc_index(ci.index); }
+    if ci.check != !0 { db.dealloc_page(ci.check >> 1); }
+    if ci.ty.is_varchar() {
+      for (data, _) in db.record_iter(tp) {
+        if !is_null(data, ci_id as u32) { db.free_varchar(data.add(ci.off as usize)); }
+      }
+    }
+
+    let iter = db.record_iter(tp); // it will iterate over old data because necessary information is copied into iter
     tp.cols.as_mut_ptr().add(ci_id).copy_from(tp.cols.as_mut_ptr().add(ci_id + 1), col_num - ci_id - 1);
     tp.col_num -= 1;
     calc_size(tp);
@@ -258,16 +248,8 @@ unsafe fn alloc_slot(db: &mut Db, dp_id: &mut u32, dp: &mut &mut DataPage, cap: 
   dp.data.as_mut_ptr().add(cur * size)
 }
 
-unsafe fn drop_list(db: &mut Db, mut first: u32) {
-  while first != !0 {
-    let next = db.get_page::<DataPage>(first).next;
-    db.dealloc_page(first);
-    first = next;
-  }
-}
-
 unsafe fn reset_data(db: &mut Db, tp_id: u32, tp: &mut TablePage, dp_id: u32, dp: &DataPage) {
-  drop_list(db, tp.first);
+  db.drop_list(tp.first);
   tp.first = dp_id;
   tp.first_free = if dp.count == tp.cap { !0 } else { dp_id };
   for ci in tp.cols() {
@@ -304,7 +286,7 @@ unsafe fn insert_all(db: &mut Db, tp_id: u32, tp: &TablePage, ci: &ColInfo) {
       }
     }};
   }
-  handle_all!(ci.ty.ty, handle);
+  handle_all!(ci.ty.fix_ty().ty, handle);
 }
 
 unsafe fn check_dup<'a>(db: &mut Db, tp: &TablePage, pks: &[&ColInfo]) -> Result<'a, ()> {

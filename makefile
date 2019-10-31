@@ -14,4 +14,8 @@ test:
 create:
 	 cargo test -p tests create --release -- --ignored
 	 mv tests/orderDB .
+	 mv tests/orderDB.lob .
 	 cp orderDB orderDB1
+	 cp orderDB.lob orderDB.lob1
+
+# rm orderDB; rm orderDB.lob; cp orderDB1 orderDB && cp orderDB.lob1 orderDB.lob

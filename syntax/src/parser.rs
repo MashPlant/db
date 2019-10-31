@@ -1,7 +1,7 @@
 use std::str::{self, FromStr};
 use typed_arena::Arena;
 
-use common::{BareTy::{*, self}, ParserError as PE, ParserErrorKind::*, Lit, CLit, ColTy, AggOp::*, BinOp::*, CmpOp::*};
+use common::{BareTy::{*, self}, FixTy, ColTy, ParserError as PE, ParserErrorKind::*, Lit, CLit, AggOp::*, BinOp::*, CmpOp::*};
 use crate::ast::*;
 use crate::Stmt::AddPrimary;
 
@@ -86,12 +86,12 @@ priority = [
 '(i|I)(n|N)' = 'In'
 '(o|O)(n|N)' = 'On'
 '(i|I)(s|S)' = 'Is'
-'(b|B)(i|I)(g|G)(i|I)(n|N)(t|T)' = 'Int' # handle bigint as int, char as varchar, decimal as float
+'(b|B)(i|I)(g|G)(i|I)(n|N)(t|T)' = 'Int' # handle bigint as int, decimal as float
 '(i|I)(n|N)(t|T)(e|E)(g|G)(e|E)(r|R)' = 'Int'
 '(i|I)(n|N)(t|T)' = 'Int'
 '(b|B)(o|O)(o|O)(l|L)' = 'Bool'
-'(c|C)(h|H)(a|A)(r|R)' = 'VarChar'
-'(v|V)(a|A)(r|R)(c|C)(h|H)(a|A)(r|R)' = 'VarChar'
+'(c|C)(h|H)(a|A)(r|R)' = 'Char'
+'(v|V)(a|A)(r|R)(c|C)(h|H)(a|A)(r|R)' = 'Varchar'
 '(d|D)(e|E)(c|C)(i|I)(m|M)(a|A)(l|L)' = 'Float'
 '(f|F)(l|L)(o|O)(a|A)(t|T)' = 'Float'
 '(d|D)(a|A)(t|T)(e|E)' = 'Date'
@@ -359,17 +359,19 @@ impl<'p> Parser<'p> {
   fn bare_ty_float(_: Token) -> BareTy { Float }
   #[rule(BareTy -> Date)]
   fn bare_ty_date(_: Token) -> BareTy { Date }
-  #[rule(BareTy -> VarChar)]
-  fn bare_ty_var_char(_: Token) -> BareTy { VarChar }
+  #[rule(BareTy -> Char)]
+  fn bare_ty_var_char(_: Token) -> BareTy { Char }
 
   #[rule(ColTy -> BareTy LPar IntLit RPar)]
-  fn col_ty(&mut self, ty: BareTy, _: Token, t: Token, _: Token) -> ColTy { t.parse(|size| ColTy { size, ty }, |line, col, s| self.pe.push(PE { line, col, kind: TypeSizeTooLarge(s) })) }
+  fn col_ty(&mut self, ty: BareTy, _: Token, t: Token, _: Token) -> ColTy { t.parse(|size| ColTy::FixTy(FixTy { size, ty }), |line, col, s| self.pe.push(PE { line, col, kind: InvalidTypeSize(s) })) }
+  #[rule(ColTy -> Varchar LPar IntLit RPar)]
+  fn col_ty_varchar(&mut self, _: Token, _: Token, t: Token, _: Token) -> ColTy { t.parse(|size| ColTy::Varchar(size), |line, col, s| self.pe.push(PE { line, col, kind: InvalidTypeSize(s) })) }
   #[rule(ColTy -> Bool)]
-  fn col_ty_bool(_: Token) -> ColTy { ColTy { size: 0, ty: Bool } }
+  fn col_ty_bool(_: Token) -> ColTy { ColTy::FixTy(FixTy { size: 0, ty: Bool }) }
   #[rule(ColTy -> Int)]
-  fn col_ty_int(_: Token) -> ColTy { ColTy { size: 0, ty: Int } }
+  fn col_ty_int(_: Token) -> ColTy { ColTy::FixTy(FixTy { size: 0, ty: Int }) }
   #[rule(ColTy -> Float)]
-  fn col_ty_float(_: Token) -> ColTy { ColTy { size: 0, ty: Float } }
+  fn col_ty_float(_: Token) -> ColTy { ColTy::FixTy(FixTy { size: 0, ty: Float }) }
   #[rule(ColTy -> Date)]
-  fn col_ty_date(_: Token) -> ColTy { ColTy { size: 0, ty: Date } }
+  fn col_ty_date(_: Token) -> ColTy { ColTy::FixTy(FixTy { size: 0, ty: Date }) }
 }

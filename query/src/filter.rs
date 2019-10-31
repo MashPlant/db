@@ -4,7 +4,7 @@ use std::borrow::Borrow;
 use common::{*, BareTy::*, CmpOp::*};
 use syntax::ast::*;
 use physics::*;
-use db::{Db, fill_ptr};
+use db::Db;
 use index::{Index, handle_all};
 
 // return true for successfully filtered with index
@@ -22,8 +22,8 @@ unsafe fn try_filter_with_index<'a>(db: &mut Db, where_: &[impl Borrow<Cond<'a>>
           if ci.index != !0 {
             let buf = Align4U8::new(ci.ty.size() as usize);
             let is_only_pred = where_.len() == 1;
-            // safe because `one_predicate` have verified the type & value format/size
-            fill_ptr(buf.ptr, ci.ty, r).unchecked_unwrap();
+            // safe because `one_predicate` have done type check
+            db.lit2ptr(buf.ptr, ci.ty.fix_ty(), r).unchecked_unwrap();
             macro_rules! handle {
               ($ty: ident) => {{
                 let mut index = Index::<{ $ty }>::new(db, tp_id, ci_id);
@@ -33,7 +33,7 @@ unsafe fn try_filter_with_index<'a>(db: &mut Db, where_: &[impl Borrow<Cond<'a>>
                       Lt => (index.iter(), index.lower_bound(buf.ptr)),
                       Le => (index.iter(), index.upper_bound(buf.ptr)),
                       Eq => (index.lower_bound(buf.ptr), index.upper_bound(buf.ptr)),
-                      _ => debug_unreachable!(),
+                      _ => impossible!(),
                     };
                     while it != end {
                       let rid = it.next().unchecked_unwrap();
@@ -52,7 +52,7 @@ unsafe fn try_filter_with_index<'a>(db: &mut Db, where_: &[impl Borrow<Cond<'a>>
                 }
               }};
             }
-            handle_all!(ci.ty.ty, handle);
+            handle_all!(ci.ty.fix_ty().ty, handle);
             return Ok(true);
           }
         }

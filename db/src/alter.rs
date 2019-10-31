@@ -1,11 +1,12 @@
 use common::{*, Error::*};
 use physics::*;
-use crate::Db;
+use crate::{Db, is_null};
 
 impl Db {
   // only alloc one index page for ci, records are not inserted into index (this is done by `index` crate)
   // `index` may be an empty string, this means it is an internal index (no extra operation needed)
   pub unsafe fn alloc_index<'a>(&mut self, ci: &mut ColInfo, index: &'a str) -> Result<'a, ()> {
+    debug_assert!(!ci.ty.is_varchar());
     if index.len() > MAX_IDX_NAME { return Err(IndexNameTooLong(index)); }
     ci.idx_name_len = index.len() as u8;
     ci.idx_name.as_mut_ptr().copy_from_nonoverlapping(index.as_ptr(), index.len());
@@ -64,6 +65,48 @@ impl Db {
       tp.name_len = new.len() as u8;
       tp.name.as_mut_ptr().copy_from_nonoverlapping(new.as_ptr(), new.len());
       Ok(())
+    }
+  }
+}
+
+impl Db {
+  pub fn drop_table<'a>(&mut self, table: &'a str) -> Result<'a, ()> {
+    unsafe {
+      let dp = self.dp();
+      for (idx, &tp_id) in dp.tables().iter().enumerate() {
+        let tp = self.get_page::<TablePage>(tp_id);
+        if tp.name() == table {
+          if self.foreign_links_to(tp_id).next().is_some() { return Err(ModifyTableWithForeignLink(table)); }
+          let tables = dp.tables.as_mut_ptr();
+          tables.add(idx).swap(tables.add(dp.table_num as usize - 1));
+          dp.table_num -= 1;
+          for ci in tp.cols() {
+            if ci.index != !0 { self.dealloc_index(ci.index); }
+            if ci.check != !0 { self.dealloc_page(ci.check >> 1); }
+          }
+          if tp.cols().iter().any(|ci| ci.ty.is_varchar()) {
+            for (data, _) in self.record_iter(tp) {
+              for (ci_id, ci) in tp.cols().iter().enumerate() {
+                if !is_null(data, ci_id as u32) && ci.ty.is_varchar() {
+                  self.free_varchar(data.add(ci.off as usize));
+                }
+              }
+            }
+          }
+          self.drop_list(tp.first);
+          return Ok(());
+        }
+      }
+      Err(NoSuchTable(table))
+    }
+  }
+
+  // `pub` for `index` crate's use
+  pub unsafe fn drop_list(&mut self, mut first: u32) {
+    while first != !0 {
+      let next = self.get_page::<DataPage>(first).next;
+      self.dealloc_page(first);
+      first = next;
     }
   }
 }
