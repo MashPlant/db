@@ -4,4 +4,6 @@ Cargo.lock
 tmp
 *.db
 *.csv
+*.html
+*.xml
 sql

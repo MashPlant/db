@@ -3,7 +3,7 @@
 .PHONY: test
 .PHONY: create
 
-BROWSER := firefox-nightly
+BROWSER := google-chrome-stable
 
 test:
 	RUSTFLAGS='-C debug-assertions' cargo tarpaulin -p tests --out Xml --release --timeout 600
