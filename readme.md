@@ -1,18 +1,48 @@
-以下摘自报告：
+A database management system implemented in Rust from scratch. [Chinese version readme](readme-cn.md).
 
-本项目使用rust实现。执行`cargo run --bin db --release`运行数据库repl，执行`cargo test -p tests --release`进行测试，执行`make`进行代码覆盖率测试。要求nightly版本的rust编译器，版本越新越好；为了执行代码覆盖率测试，需先安装`cargo-tarpaulin`(安装方法为`cargo install cargo-tarpaulin`)和`pycobertura`(安装方法为`pip install pycobertura`)，并且装有makefile中指定的浏览器。
+# Features
 
-截至目前为止，rust代码总行数为3580。
+- Query optimization based on B+ tree
+- Multi-table join optimization based on sorting and binary search
+- Aggregate query: supports `avg`, `sum`, `max`, `min`, `count` keywords to aggregate the results of `select`
+- Fuzzy matching: supports `like` keywords, wildcard characters `%` and `_`, and escape characters
+- `DATE` data type
+- Supports `unique` and `check` constraint
+- `insert` supports specifying the column to be inserted, and the `set` clause of `update` supports complex expressions
+- Colored REPL
 
-实现了以下的额外功能：
+<img src="report/repl.png" width="400"/>
 
-- 简单的查询优化
-- 多表连接：理论上支持任意多表的连接(只要性能和空间允许)
-- 聚集查询：支持`avg`，`sum`，`max`，`min`，`count`关键字，对`select`的结果进行聚集
-- 模糊查询：支持`like`关键字，包括通配符`%`和`_`，支持转义字符
-- 日期数据类型
-- `unique`约束，`check`约束
-- `insert`支持指定要插入数据的列，`update`的`set`子句支持复杂的表达式
-- 简单的命令行着色
+# Building and Testing
 
-完整报告见[report.pdf](report/report.pdf)。
+Requires nightly Rust compiler. Tested on `rustc 1.54.0-nightly`, and a newer version is also welcomed.
+
+Execute `cargo run --bin db --release` to run the database REPL.
+
+[tests](tests) crate contains integration tests. Database creation takes a relatively long time and other tests depend on it, so it needs to be executed separately in advance: `cargo test -p tests create --release - --ignored`. Then execute `cargo test -p tests --release`.
+
+[makefile](makefile) is used for code coverage test. Installation prerequisites:
+
+- `cargo-tarpaulin` (`cargo install cargo-tarpaulin`)
+- `pycobertura` (`pip install pycobertura`)
+- The browser excutable specified in the `BROWSER` variable
+
+Execute `make` to perform code coverage test. An example looks like:
+
+<img src="report/coverage.png" width="400"/>
+
+# Project Structure
+
+The project divides logical components with Rust's crates as the boundary. The dependencies between crates are like:
+
+<img src="report/arch.png" width="250"/>
+
+- [common](common): Provide common functions and data structures, such as error handling mechanisms
+- [physics](physics): Define the data structures of different physics pages of the database
+- [syntax](syntax): Parse SQL statements into AST based on the parser generator [lalr1](https://github.com/MashPlant/lalr1) written by myself
+- [db](db): Define the core interfaces of the database, and implement some modification operations not requiring the index
+- [index](index): Implement index based on B+ tree, and implement some modification operations requiring the index
+- [query](query): Implement the four kinds of queries, QRUD
+- [driver](driver): Top-level interfaces and executables
+
+See [report.pdf](report/report.pdf) for a (Chinese) project report。
