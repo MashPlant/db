@@ -1,7 +1,5 @@
-#![feature(ptr_offset_from)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
-#![feature(inner_deref)]
 
 pub mod insert;
 pub mod delete;

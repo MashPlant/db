@@ -1,4 +1,3 @@
-#![feature(ptr_offset_from)]
 #![feature(box_syntax)]
 
 pub mod db;

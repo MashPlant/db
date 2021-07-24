@@ -113,7 +113,7 @@ impl TablePage {
   }
 }
 
-#[cfg_attr(tarpaulin, skip)]
+#[cfg_attr(tarpaulin, ignore)]
 fn _ck() {
   const_assert_eq!(size_of::<ColInfo>(), 64);
   const_assert_eq!(size_of::<TablePage>(), common::PAGE_SIZE);

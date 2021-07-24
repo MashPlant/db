@@ -94,7 +94,7 @@ pub fn update<'a>(u: &Update<'a>, db: &mut Db) -> ModifyResult<'a, u32> {
     let mut ctx = InsertCtx::new(db, u.table, None)?;
     let f_links = db.foreign_links_to(ctx.tp_id).collect::<Vec<_>>();
     let pred = one_where(db.pr(), &u.where_, ctx.tp)?;
-    let mut re_cache = HashMap::new();
+    let mut re_cache = HashMap::default();
     let mut cols = Vec::with_capacity(u.sets.len());
     let mut vals = vec![CLit::new(Lit::Null); u.sets.len()]; // the initial value is useless (and not really necessary...)
     for (col, e) in &u.sets {

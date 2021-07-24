@@ -10,7 +10,7 @@ syntax = { path = "../syntax" }
 physics = { path = "../physics" }
 db = { path = "../db" }
 index = { path = "../index" }
-chrono = "0.4"
-regex = "1"
-unchecked_unwrap = "1.0.1"
-ordslice = "0.3.0"
+chrono = "*"
+regex = "*"
+unchecked_unwrap = "*"
+ordslice = "*"

@@ -7,5 +7,5 @@ edition = "2018"
 [dependencies]
 common = { path = "../common" }
 parser-macros = { git = "https://github.com/MashPlant/lalr1" }
-typed-arena = "1.6.1"
-derive_more = "0.15.0"
+typed-arena = "*"
+derive_more = "*"

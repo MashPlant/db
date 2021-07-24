@@ -8,8 +8,8 @@ edition = "2018"
 physics = { path = "../physics" }
 common = { path = "../common" }
 syntax = { path = "../syntax" }
-memmap = "0.7.0"
-chrono = "0.4"
-unchecked_unwrap = "1.0.1"
-regex = "1"
+memmap = "*"
+chrono = "*"
+unchecked_unwrap = "*"
+regex = "*"
 regex-syntax = "*"

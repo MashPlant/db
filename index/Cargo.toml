@@ -8,9 +8,9 @@ edition = "2018"
 common = { path = "../common" }
 physics = { path = "../physics" }
 db = { path = "../db" }
-chrono = "0.4"
-unchecked_unwrap = "1.0.1"
 syntax = { path = "../syntax" }
+chrono = "*"
+unchecked_unwrap = "*"
 
 [features]
 print-dot = []

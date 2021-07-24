@@ -184,7 +184,7 @@ pub fn select<'a, 'b>(s: &Select<'a>, db: &'b Db) -> Result<'a, SelectResult<'b>
     if tbl_num == 0 { return Ok(SelectResult { cols: vec![], data: vec![] }); }
     macro_rules! at { ($arr: expr, $x: expr, $y: expr) => { $arr.get_unchecked_mut($x * tbl_num + $y) }; }
     let mut tbls = IndexMap::default();
-    let mut cols = HashMap::new();
+    let mut cols = HashMap::default();
     for (idx, &t) in s.tables.iter().enumerate() {
       let (tp_id, tp) = db.get_tp(t)?;
       if tbls.insert(t, (tp_id, &*tp.p())).is_some() { return Err(DupTable(t)); }

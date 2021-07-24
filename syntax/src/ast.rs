@@ -3,20 +3,20 @@ use std::fmt;
 
 #[derive(derive_more::From, Debug)]
 pub enum Stmt<'a> {
-  Insert(Insert<'a>),
-  Delete(Delete<'a>),
-  Select(Select<'a>),
-  Update(Update<'a>),
+  #[from] Insert(Insert<'a>),
+  #[from] Delete(Delete<'a>),
+  #[from] Select(Select<'a>),
+  #[from] Update(Update<'a>),
   CreateDb(&'a str),
   DropDb(&'a str),
   ShowDb(&'a str),
   ShowDbs,
   UseDb(&'a str),
-  CreateTable(CreateTable<'a>),
+  #[from] CreateTable(CreateTable<'a>),
   DropTable(&'a str),
   ShowTable(&'a str),
   ShowTables,
-  CreateIndex(CreateIndex<'a>),
+  #[from] CreateIndex(CreateIndex<'a>),
   DropIndex {
     index: &'a str,
     // `table` is only for check, doesn't provide any information
@@ -24,7 +24,7 @@ pub enum Stmt<'a> {
     table: Option<&'a str>,
   },
   Rename { old: &'a str, new: &'a str },
-  AddForeign(AddForeign<'a>),
+  #[from] AddForeign(AddForeign<'a>),
   DropForeign { table: &'a str, col: &'a str },
   AddPrimary { table: &'a str, cols: Vec<&'a str> },
   DropPrimary { table: &'a str, cols: Vec<&'a str> },

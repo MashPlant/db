@@ -1,4 +1,3 @@
-#![feature(ptr_offset_from)]
 #[macro_use]
 extern crate static_assertions;
 

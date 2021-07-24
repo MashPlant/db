@@ -31,5 +31,5 @@ impl IndexPage {
   pub fn slot_size(&self) -> u16 { self.key_size() + if self.leaf { 0 } else { 4 } }
 }
 
-#[cfg_attr(tarpaulin, skip)]
+#[cfg_attr(tarpaulin, ignore)]
 fn _ck() { const_assert_eq!(size_of::<IndexPage>(), common::PAGE_SIZE); }

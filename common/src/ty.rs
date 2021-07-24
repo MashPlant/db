@@ -18,7 +18,7 @@ pub struct FixTy {
 pub enum ColTy { FixTy(FixTy), Varchar(u16) }
 
 impl ColTy {
-  #[cfg_attr(tarpaulin, skip)]
+  #[cfg_attr(tarpaulin, ignore)]
   fn _ck() {
     assert_eq_size!(FixTy, u16);
     assert_eq_size!(ColTy, u32);
@@ -104,7 +104,7 @@ pub struct CLit<'a>(u64, u64, PhantomData<&'a str>);
 
 impl<'a> CLit<'a> {
   // I don't expect it to work on a 32-bit system
-  #[cfg_attr(tarpaulin, skip)]
+  #[cfg_attr(tarpaulin, ignore)]
   fn _ck() { assert_eq_size!(u64, usize); }
 
   pub fn new(lit: Lit<'a>) -> Self {

@@ -29,5 +29,5 @@ impl DbPage {
   }
 }
 
-#[cfg_attr(tarpaulin, skip)]
+#[cfg_attr(tarpaulin, ignore)]
 fn _ck() { const_assert_eq!(size_of::<DbPage>(), common::PAGE_SIZE); }

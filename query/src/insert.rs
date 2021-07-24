@@ -25,7 +25,7 @@ impl<'a> InsertCtx<'a> {
     let pks = tp.primary_cols().collect::<Vec<_>>();
     let pk_set: HashSet<_> = if pks.len() > 1 {
       db.record_iter(tp).map(|(data, _)| hash_pks(data, &pks)).collect()
-    } else { HashSet::new() }; // no need to collect
+    } else { HashSet::default() }; // no need to collect
     let cols = if let Some(cols1) = cols {
       let mut cols = vec![0; cols1.len()].into_boxed_slice();
       for (idx, c) in cols1.iter().enumerate() {

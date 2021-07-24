@@ -57,7 +57,7 @@ pub struct VarcharSlot {
   pub cap: u16,
 }
 
-#[cfg_attr(tarpaulin, skip)]
+#[cfg_attr(tarpaulin, ignore)]
 fn _ck() {
   const_assert_eq!(size_of::<DataPage>(), common::PAGE_SIZE);
   const_assert_eq!(size_of::<CheckPage>(), common::PAGE_SIZE);

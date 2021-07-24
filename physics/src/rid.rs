@@ -18,7 +18,7 @@ impl fmt::Debug for Rid {
   }
 }
 
-#[cfg_attr(tarpaulin, skip)]
+#[cfg_attr(tarpaulin, ignore)]
 fn _ck() {
   assert_eq_size!(Rid, u32);
   assert_eq_size!(Rid, Option<Rid>); // thanks to NonZeroU32

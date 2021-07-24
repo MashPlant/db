@@ -1,6 +1,7 @@
 #![feature(proc_macro_hygiene)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
+#![allow(unused_unsafe)]
 
 pub mod ast;
 pub mod parser;
@@ -16,7 +17,7 @@ pub fn work<'a>(code: &'a str, alloc: &'a Arena<u8>) -> Result<Vec<Stmt<'a>>, Er
   match p.parse(&mut Lexer::new(code.as_bytes())) {
     Ok(ss) if p.pe.is_empty() => Ok(ss),
     Err(t) => {
-      match t.ty {
+      match t.kind {
         TokenKind::_Err => p.pe.push(PE { line: t.line, col: t.col, kind: UnexpectedChar(t.piece[0] as char) }),
         _ => p.pe.push(PE { line: t.line, col: t.col, kind: SyntaxError }),
       }

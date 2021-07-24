@@ -290,7 +290,7 @@ unsafe fn insert_all(db: &mut Db, tp_id: u32, tp: &TablePage, ci: &ColInfo) {
 }
 
 unsafe fn check_dup<'a>(db: &mut Db, tp: &TablePage, pks: &[&ColInfo]) -> Result<'a, ()> {
-  let mut pk_set = HashSet::new();
+  let mut pk_set = HashSet::default();
   for (data, _) in db.record_iter(tp) {
     if !pk_set.insert(hash_pks(data, &pks)) { return Err(PutDupOnPrimary); }
   }

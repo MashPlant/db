@@ -1,4 +1,4 @@
-use rustyline::{Editor, Helper, highlight::Highlighter, completion::Completer, hint::Hinter, error::ReadlineError};
+use rustyline::{Editor, Helper, highlight::Highlighter, completion::Completer, hint::Hinter, validate::Validator, error::ReadlineError};
 use colored::*;
 use std::{borrow::Cow, str, fs};
 use typed_arena::Arena;
@@ -9,7 +9,7 @@ use syntax::{Lexer, TokenKind};
 struct SqlHelper;
 
 impl Highlighter for SqlHelper {
-  #[cfg_attr(tarpaulin, skip)]
+  #[cfg_attr(tarpaulin, ignore)]
   fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
     use TokenKind::*;
     let mut lexer = Lexer::new(line.as_bytes());
@@ -19,7 +19,7 @@ impl Highlighter for SqlHelper {
       let piece = str::from_utf8(token.piece).unwrap();
       let start = token.col as usize - 1 + ret.len() - line.len();
       let range = start..start + piece.len();
-      match token.ty {
+      match token.kind {
         Lt | Le | Ge | Gt | Eq | Ne | LPar | RPar | Add | Sub | Mul | Div | Mod | Comma | Semicolon => {}
         Null | True | False | FloatLit | IntLit | StrLit => ret.replace_range(range, &piece.green().to_string()),
         Int | Bool | Char | Varchar | Float | Date => ret.replace_range(range, &piece.cyan().to_string()),
@@ -34,13 +34,10 @@ impl Highlighter for SqlHelper {
   fn highlight_char(&self, _line: &str, _pos: usize) -> bool { true }
 }
 
-impl Completer for SqlHelper {
-  type Candidate = String;
-}
-
-impl Hinter for SqlHelper {}
-
+impl Completer for SqlHelper { type Candidate = String; }
+impl Hinter for SqlHelper { type Hint = String; }
 impl Helper for SqlHelper {}
+impl Validator for SqlHelper {}
 
 fn main() {
   let mut rl = Editor::new();
